@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>GiaTộc ┊Name Hub</title>
+  <meta name="theme-color" content="#07111f">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="/style.css?v=1.2.1">
+</head>
+<body>
+<div class="bg"></div>
+<main>
+  <section id="auth" class="card auth">
+    <h1>⚡ GiaTộc ┊Name Hub</h1>
+    <p>Không Gian Để Kết Nối Các Game Thủ</p>
+    <input id="user" placeholder="Tên đăng nhập" autocomplete="username">
+    <input id="display" placeholder="Tên hiển thị (đăng ký)">
+    <input id="pass" type="password" placeholder="Mật khẩu" autocomplete="current-password">
+    <div class="row"><button data-action="login">Đăng nhập</button><button data-action="register" class="ghost">Đăng ký</button></div>
+    <div id="msg"></div>
+  </section>
+
+  <section id="app" hidden>
+    <header class="top card compact">
+      <div><h1>GiaTộc ┊Name</h1><small id="clock"></small></div>
+      <div class="top-actions"><button id="installAppBtn" class="ghost" hidden>📲 Cài ứng dụng</button><button data-action="logout">Đăng xuất</button></div>
+    </header>
+
+    <nav class="hub-nav card" aria-label="Điều hướng">
+      <button data-route="overview">🏠 Tổng quan</button>
+      <button data-route="profile">🏆 Thành tích & Hồ sơ</button>
+      <button data-route="chat">💬 Trò chuyện</button>
+      <button data-route="avatar-tool">👑 Avatar Role</button>
+      <button data-route="qr">🔳 Mã QR</button>
+      <button data-route="pdf">📄 Công cụ PDF</button>
+      <button data-route="tournament">🏅 Bảng đấu</button>
+      <button data-route="banner">🖼️ Banner tuyển thành viên</button>
+      <button data-route="image-tool">✂️ Công cụ ảnh</button>
+      <button data-route="music">🎵 Âm nhạc</button>
+      <button id="adminNav" data-route="admin" hidden>🛡️ Quản trị</button>
+    </nav>
+
+    <section class="page-section" data-section="overview">
+      <div class="dashboard-grid">
+        <aside class="card profile-mini">
+          <div id="profileAvatarWrap" class="role-avatar member hero"><img id="avatar" class="avatar"><span class="role-crown">👤</span></div>
+          <h2 id="name"></h2><span id="role" class="role"></span>
+          <button class="ghost" data-go="profile">Xem hồ sơ</button>
+        </aside>
+        <section class="card">
+          <div class="section-title"><h2>👥 THÀNH VIÊN</h2><span id="memberCount" class="status-pill">0 online</span></div>
+          <div id="memberList" class="members"></div>
+        </section>
+        <section class="card feature-overview">
+          <div class="section-title"><h2>🧰 Tiện ích cộng đồng</h2><span class="status-pill">Web + PWA</span></div>
+          <div class="quick-grid">
+            <button data-go="chat">💬 Trò chuyện</button><button data-go="avatar-tool">👑 Avatar Role</button><button data-go="qr">🔳 Tạo QR</button>
+            <button data-go="pdf">📄 PDF</button><button data-go="tournament">🏅 Bảng đấu</button><button data-go="banner">🖼️ Banner</button><button data-go="image-tool">✂️ Ảnh</button>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <section class="page-section" data-section="profile" hidden>
+      <div class="two-col">
+        <section class="card profile-editor">
+          <div class="section-title"><h2>🏆 Thành tích & Hồ sơ</h2><span class="status-pill">Hồ sơ thành viên</span></div>
+          <div class="profile-hero-row">
+            <div id="profilePageAvatarWrap" class="role-avatar member hero"><img id="profilePageAvatar"><span class="role-crown">👤</span></div>
+            <div><h2 id="profilePageName"></h2><span id="profilePageRole" class="role"></span><p class="muted" id="profileJoinDate"></p></div>
+          </div>
+          <label>Avatar</label><input id="avatarFile" type="file" accept="image/*"><button data-action="upload-avatar">Đổi avatar</button>
+          <label>Tên hiển thị</label><input id="newName" placeholder="Tên hiển thị">
+          <label>Giới thiệu</label><textarea id="bio" maxlength="300" placeholder="Giới thiệu ngắn về bạn..."></textarea>
+          <label>Game đang chơi</label><input id="games" placeholder="Ví dụ: Roblox, Minecraft, Free Fire...">
+          <label>ID game</label><input id="gameId" placeholder="UID / ID game chính">
+          <label>Discord</label><input id="discord" placeholder="Tên Discord hoặc ID">
+          <button data-action="save-profile">💾 Lưu hồ sơ</button>
+        </section>
+        <section class="card">
+          <div class="section-title"><h2>🏅 Thành tích</h2><span id="achievementCount" class="status-pill">0 thành tích</span></div>
+          <div id="achievementList" class="achievement-list"></div>
+        </section>
+      </div>
+    </section>
+
+    <section class="page-section" data-section="chat" hidden>
+      <section class="card chat-card">
+        <div class="section-title"><h2>💬 Trò chuyện cộng đồng</h2><span class="status-pill">Tự làm mới</span></div>
+        <div id="chatMessages" class="chat-messages"></div>
+        <div class="chat-compose"><input id="chatInput" maxlength="500" placeholder="Nhập tin nhắn..." data-enter-action="send-chat"><button data-action="send-chat">Gửi</button></div>
+      </section>
+    </section>
+
+    <section class="page-section" data-section="avatar-tool" hidden>
+      <section class="card tool-card">
+        <div class="section-title"><h2>👑 Tạo avatar khung Role</h2><span class="status-pill">512 × 512 PNG</span></div>
+        <div class="tool-grid">
+          <div class="controls">
+            <label>Chọn ảnh</label><input id="roleAvatarFile" type="file" accept="image/*" data-change-action="load-role-avatar">
+            <label>Role</label><select id="roleAvatarRole" data-change-action="draw-role-avatar"><option>Boss</option><option>Kì Cựu</option><option selected>Member</option></select>
+            <label>Hiển thị tên</label><input id="roleAvatarName" placeholder="Tên thành viên" data-input-action="draw-role-avatar">
+            <button data-action="download-canvas" data-canvas="roleAvatarCanvas" data-filename="avatar-role.png">⬇️ Tải avatar PNG</button>
+          </div>
+          <div class="canvas-wrap"><canvas id="roleAvatarCanvas" width="512" height="512"></canvas></div>
+        </div>
+      </section>
+    </section>
+
+    <section class="page-section" data-section="qr" hidden>
+      <section class="card tool-card">
+        <div class="section-title"><h2>🔳 Trình tạo mã QR</h2><span class="status-pill">PNG</span></div>
+        <div class="tool-grid">
+          <div class="controls"><label>Nội dung / link</label><textarea id="qrText" placeholder="Nhập link Discord, website hoặc nội dung..."></textarea><label>Kích thước</label><select id="qrSize"><option>256</option><option selected>512</option><option>768</option><option>1024</option></select><button data-action="generate-qr">Tạo mã QR</button><button class="ghost" data-action="download-qr">⬇️ Tải QR</button></div>
+          <div class="preview-box"><img id="qrPreview" alt="QR sẽ hiện ở đây"><p id="qrHint" class="muted">Nhập nội dung rồi bấm Tạo mã QR.</p></div>
+        </div>
+      </section>
+    </section>
+
+    <section class="page-section" data-section="pdf" hidden>
+      <section class="card">
+        <div class="section-title"><h2>📄 Chuyển đổi, gộp & nén PDF</h2><span class="status-pill">Xử lý theo yêu cầu</span></div>
+        <div class="pdf-grid">
+          <div class="tool-box"><h3>🔗 Gộp PDF</h3><p class="muted">Chọn từ 2–10 file PDF theo đúng thứ tự cần gộp.</p><input id="mergePdfFiles" type="file" accept="application/pdf" multiple><button data-action="merge-pdfs">Gộp & tải PDF</button></div>
+          <div class="tool-box"><h3>🖼️ Ảnh → PDF</h3><p class="muted">Hỗ trợ PNG/JPG, mỗi ảnh thành một trang A4.</p><input id="imagesToPdf" type="file" accept="image/png,image/jpeg" multiple><button data-action="images-to-pdf">Chuyển & tải PDF</button></div>
+          <div class="tool-box"><h3>🗜️ Nén PDF</h3><p class="muted">Tối ưu cấu trúc PDF. Mức giảm dung lượng tùy nội dung file.</p><input id="compressPdfFile" type="file" accept="application/pdf"><button data-action="compress-pdf">Nén & tải PDF</button></div>
+        </div><div id="pdfStatus" class="tool-status"></div>
+      </section>
+    </section>
+
+    <section class="page-section" data-section="tournament" hidden>
+      <section class="card">
+        <div class="section-title"><h2>🏅 Trình tạo bảng đấu loại trực tiếp</h2><span class="status-pill">Knockout</span></div>
+        <div class="two-col tournament-layout"><div><label>Tên giải đấu</label><input id="tournamentName" value="GiaTộc ┊Name Tournament"><label>Danh sách người/đội — mỗi dòng một tên</label><textarea id="tournamentPlayers" rows="12" placeholder="Team A&#10;Team B&#10;Team C&#10;Team D"></textarea><button data-action="generate-tournament">Tạo bảng đấu</button></div><div><div id="tournamentTitle" class="bracket-title"></div><div id="bracket" class="bracket"></div></div></div>
+      </section>
+    </section>
+
+    <section class="page-section" data-section="banner" hidden>
+      <section class="card">
+        <div class="section-title"><h2>🖼️ Tạo banner tuyển thành viên</h2><span class="status-pill">1600 × 400</span></div>
+        <div class="tool-grid wide-preview">
+          <div class="controls"><label>Tên nhóm / cộng đồng</label><input id="bannerName" value="GiaTộc ┊Name"><label>Game</label><input id="bannerGame" placeholder="Roblox / Minecraft / Free Fire..."><label>Nội dung tuyển</label><input id="bannerText" value="TUYỂN THÀNH VIÊN"><label>Yêu cầu</label><textarea id="bannerReq" placeholder="Hoạt động vui vẻ • Tôn trọng cộng đồng • Chơi cùng nhau"></textarea><label>Liên hệ</label><input id="bannerContact" placeholder="Discord / website"><label>Ảnh nền (không bắt buộc)</label><input id="bannerBg" type="file" accept="image/*" data-change-action="load-banner-bg"><button data-action="draw-banner">Cập nhật banner</button><button class="ghost" data-action="download-canvas" data-canvas="bannerCanvas" data-filename="banner-tuyen-thanh-vien.png">⬇️ Tải banner</button></div>
+          <div class="canvas-wrap banner-canvas-wrap"><canvas id="bannerCanvas" width="1600" height="400"></canvas></div>
+        </div>
+      </section>
+    </section>
+
+    <section class="page-section" data-section="image-tool" hidden>
+      <section class="card">
+        <div class="section-title"><h2>✂️ Cắt, xoay, watermark & chuyển ảnh</h2><span class="status-pill">PNG / JPG / WebP</span></div>
+        <div class="tool-grid">
+          <div class="controls"><label>Chọn ảnh</label><input id="imageToolFile" type="file" accept="image/*" data-change-action="load-image-tool"><div class="crop-grid"><input id="cropX" type="number" min="0" placeholder="X"><input id="cropY" type="number" min="0" placeholder="Y"><input id="cropW" type="number" min="1" placeholder="Rộng"><input id="cropH" type="number" min="1" placeholder="Cao"></div><div class="row"><button data-action="rotate-image" data-deg="-90">↶ -90°</button><button data-action="rotate-image" data-deg="90">↷ +90°</button></div><label>Watermark</label><input id="watermarkText" placeholder="GiaTộc ┊Name" data-input-action="render-image-tool"><label>Định dạng xuất</label><select id="imageFormat"><option value="image/png">PNG</option><option value="image/jpeg">JPG</option><option value="image/webp">WebP</option></select><label>Chất lượng JPG/WebP</label><input id="imageQuality" type="range" min="0.4" max="1" step="0.05" value="0.9"><button data-action="render-image-tool">Áp dụng</button><button class="ghost" data-action="download-edited-image">⬇️ Tải ảnh</button></div>
+          <div class="canvas-wrap checker"><canvas id="imageToolCanvas" width="900" height="600"></canvas></div>
+        </div>
+      </section>
+    </section>
+
+    <section class="page-section" data-section="music" hidden>
+      <section class="card"><div class="section-title"><h2>🎵 Trình phát nhạc</h2><span class="status-pill">Thư viện cộng đồng</span></div><input id="musicTitle" placeholder="Tên bài"><input id="musicUrl" placeholder="Link web / audio"><button data-action="add-music">Lưu nhạc</button><div id="musicList"></div></section>
+    </section>
+
+    <section id="admin" class="page-section" data-section="admin" hidden>
+      <section class="card">
+        <div class="section-title"><h2>🛡️ Trung tâm quản trị</h2><span class="status-pill">Quản lý website</span></div>
+        <input id="adminSearch" placeholder="Tìm tên hiển thị hoặc tài khoản..." data-input-action="render-admin-users">
+        <div class="admin-toolbar"><button data-action="backup">💾 Tạo backup dữ liệu</button><button class="ghost" data-action="load-logs">📋 Nhật ký quản trị</button></div>
+        <div id="users"></div><div id="logs" class="logs" hidden></div>
+      </section>
+    </section>
+  </section>
+</main>
+<script src="/app.js?v=1.2.1"></script>
+<script src="/pwa.js?v=1.2.1"></script>
+</body>
+</html>

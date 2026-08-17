@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+ <defs>
+  <radialGradient id="bg" cx="50%" cy="40%"><stop offset="0" stop-color="#16385c"/><stop offset=".7" stop-color="#07121f"/><stop offset="1" stop-color="#020509"/></radialGradient>
+  <linearGradient id="g"><stop stop-color="#d9f7ff"/><stop offset=".35" stop-color="#54c7ff"/><stop offset=".7" stop-color="#7678ff"/><stop offset="1" stop-color="#e9fbff"/></linearGradient>
+  <filter id="glow"><feGaussianBlur stdDeviation="7" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+ </defs>
+ <rect width="512" height="512" rx="84" fill="url(#bg)"/>
+ <circle cx="256" cy="247" r="183" fill="#07111a" stroke="#183b5f" stroke-width="16"/>
+ <circle cx="256" cy="247" r="172" fill="none" stroke="url(#g)" stroke-width="8" filter="url(#glow)"/>
+ <path d="M256 53 289 113 356 95 337 161 397 196 337 231 356 297 289 279 256 339 223 279 156 297 175 231 115 196 175 161 156 95 223 113z" fill="none" stroke="url(#g)" stroke-width="7" opacity=".95" filter="url(#glow)"/>
+ <circle cx="256" cy="235" r="63" fill="#253342"/>
+ <path d="M143 395c10-80 56-121 113-121s103 41 113 121" fill="#253342"/>
+ <rect x="105" y="406" width="302" height="66" rx="25" fill="#07111a" stroke="url(#g)" stroke-width="5"/>
+ <text x="256" y="449" text-anchor="middle" fill="#dff7ff" font-family="Segoe UI,Arial" font-weight="800" font-size="29">🛡 KÌ CỰU</text>
+</svg>

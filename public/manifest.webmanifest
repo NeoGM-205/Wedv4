@@ -1,0 +1,95 @@
+{
+  "id": "/",
+  "name": "GiaTộc ┊Name Hub",
+  "short_name": "GiaTộc Name",
+  "description": "GiaTộc ┊Name Hub: hồ sơ, thành tích, trò chuyện và bộ công cụ cộng đồng game.",
+  "lang": "vi",
+  "dir": "ltr",
+  "start_url": "/#overview",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": [
+    "window-controls-overlay",
+    "standalone"
+  ],
+  "orientation": "any",
+  "background_color": "#050816",
+  "theme_color": "#07111f",
+  "categories": [
+    "social",
+    "entertainment",
+    "games"
+  ],
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/maskable-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icons/maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Trang tổng quan",
+      "short_name": "Tổng quan",
+      "url": "/#overview",
+      "icons": [
+        {
+          "src": "/icons/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    },
+    {
+      "name": "Trò chuyện",
+      "short_name": "Chat",
+      "url": "/#chat",
+      "icons": [
+        {
+          "src": "/icons/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    },
+    {
+      "name": "Công cụ QR",
+      "short_name": "QR",
+      "url": "/#qr",
+      "icons": [
+        {
+          "src": "/icons/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    },
+    {
+      "name": "Công cụ PDF",
+      "short_name": "PDF",
+      "url": "/#pdf",
+      "icons": [
+        {
+          "src": "/icons/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    }
+  ]
+}

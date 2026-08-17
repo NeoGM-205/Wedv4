@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+ <defs>
+  <radialGradient id="bg"><stop stop-color="#1e3b3d"/><stop offset=".68" stop-color="#081516"/><stop offset="1" stop-color="#030707"/></radialGradient>
+  <linearGradient id="g"><stop stop-color="#c9fff5"/><stop offset=".4" stop-color="#39e6c0"/><stop offset="1" stop-color="#3aa7ff"/></linearGradient>
+  <filter id="glow"><feGaussianBlur stdDeviation="6" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+ </defs>
+ <rect width="512" height="512" rx="84" fill="url(#bg)"/>
+ <circle cx="256" cy="247" r="183" fill="#071313" stroke="#123437" stroke-width="16"/>
+ <circle cx="256" cy="247" r="172" fill="none" stroke="url(#g)" stroke-width="7" filter="url(#glow)"/>
+ <path d="M85 256 111 238 128 210 143 242 174 256 143 270 128 302 111 274zm342 0-26-18-17-28-15 32-31 14 31 14 15 32 17-28z" fill="url(#g)" filter="url(#glow)"/>
+ <circle cx="256" cy="235" r="63" fill="#294043"/>
+ <path d="M143 395c10-80 56-121 113-121s103 41 113 121" fill="#294043"/>
+ <rect x="110" y="406" width="292" height="66" rx="25" fill="#071313" stroke="url(#g)" stroke-width="5"/>
+ <text x="256" y="449" text-anchor="middle" fill="#cffff6" font-family="Segoe UI,Arial" font-weight="800" font-size="28">👤 MEMBER</text>
+</svg>
