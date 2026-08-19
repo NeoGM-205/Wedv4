@@ -1,7 +1,7 @@
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
-const CACHEABLE_GETS = new Set(['/api/me', '/api/members', '/api/music']);
-const isCacheableGet = url => CACHEABLE_GETS.has(url) || url.startsWith('/api/chat') || url.startsWith('/api/team-posts') || url.startsWith('/api/notifications');
+const CACHEABLE_GETS = new Set(['/api/me', '/api/members', '/api/music', '/api/friends']);
+const isCacheableGet = url => CACHEABLE_GETS.has(url) || url.startsWith('/api/chat') || url.startsWith('/api/team-posts') || url.startsWith('/api/notifications') || url.startsWith('/api/dm/');
 let me = null;
 let adminCache = [];
 let chatTimer = null;
@@ -13,6 +13,8 @@ let qrBlobUrl = '';
 let selectedChatRoom = 'general';
 let replyingTo = null;
 let notificationTimer = null;
+let friendsState = { friends: [], incoming: [], outgoing: [], members: [] };
+let selectedDmUserId = '';
 
 const roleMeta = {
   'Boss': { key: 'boss', icon: '👑', label: 'BOSS', fallback: '/assets/avatar-boss.svg', c1: '#ffd86b', c2: '#ff7a00' },
@@ -83,6 +85,7 @@ async function updateOfflineStatus() {
   if (bar) bar.classList.toggle('is-offline', !online);
   const chatState = $('#chatConnectionState');
   if (chatState) chatState.textContent = online ? 'Online • tự làm mới' : 'Offline • dùng dữ liệu đã lưu';
+  await renderSyncCenter();
 }
 window.updateConnectivity = updateOfflineStatus;
 
@@ -98,6 +101,7 @@ async function syncOfflineQueue(showResult = false) {
   if (!items.length) { await updateOfflineStatus(); if (showResult) alert('Không có dữ liệu chờ đồng bộ.'); return; }
   let done = 0;
   for (const item of items) {
+    if (item.status === 'conflict') continue;
     try {
       let response;
       if (item.type === 'avatar' && item.fileBlob) {
@@ -117,9 +121,14 @@ async function syncOfflineQueue(showResult = false) {
         break;
       }
       if (!response.ok) {
+        if (response.status === 409 && item.type === 'profile') {
+          const conflictData = await response.json().catch(() => ({}));
+          await window.OfflineDB?.updateQueue?.(item.id, { status: 'conflict', conflictData, lastError: conflictData.error || 'Xung đột dữ liệu hồ sơ', lastTriedAt: Date.now() });
+          continue;
+        }
         if (response.status >= 400 && response.status < 500 && response.status !== 429) {
-          await window.OfflineDB.deleteQueue(item.id);
-          done++;
+          const detail = await response.json().catch(() => ({}));
+          await window.OfflineDB?.updateQueue?.(item.id, { status: 'error', retries: (item.retries || 0) + 1, lastError: detail.error || `HTTP ${response.status}`, lastTriedAt: Date.now() });
           continue;
         }
         throw new Error(`HTTP ${response.status}`);
@@ -135,7 +144,7 @@ async function syncOfflineQueue(showResult = false) {
   await updateOfflineStatus();
   if (done) {
     try { me = (await api('/api/me')).user; await snapshotPut('/api/me', { user: me }); renderProfile(); } catch {}
-    await Promise.allSettled([members(), music(), loadChat(), loadTeamPosts(), loadNotifications()]);
+    await Promise.allSettled([members(), music(), loadChat(), loadTeamPosts(), loadNotifications(), loadFriends()]);
   }
   if (showResult) alert(done ? `Đã đồng bộ ${done} thao tác.` : 'Chưa đồng bộ được dữ liệu.');
 }
@@ -144,7 +153,7 @@ window.syncOfflineQueue = syncOfflineQueue;
 window.refreshAfterBackgroundSync = async () => {
   if (!me || !isOnline()) return;
   try { me = (await api('/api/me')).user; renderProfile(); } catch {}
-  await Promise.allSettled([members(), music(), loadChat(), loadTeamPosts(), loadNotifications(), adminUsers()]);
+  await Promise.allSettled([members(), music(), loadChat(), loadTeamPosts(), loadNotifications(), loadFriends(), adminUsers()]);
   await updateOfflineStatus();
 };
 
@@ -178,7 +187,7 @@ async function logout() {
 }
 
 function routeTo(route) {
-  const allowed = ['overview','profile','chat','team','notifications','avatar-tool','qr','pdf','tournament','banner','image-tool','music','security','admin'];
+  const allowed = ['overview','profile','chat','team','notifications','friends','sync-center','avatar-tool','qr','pdf','tournament','banner','image-tool','music','security','admin'];
   if (!allowed.includes(route)) route = 'overview';
   if (route === 'admin' && !['Boss','Kì Cựu'].includes(me?.role)) route = 'overview';
   $$('.page-section').forEach(s => s.hidden = s.dataset.section !== route);
@@ -186,10 +195,13 @@ function routeTo(route) {
   history.replaceState(null, '', '#' + route);
   if (route === 'chat') { loadChat(); startChatTimer(); } else stopChatTimer();
   if (route === 'team') loadTeamPosts();
-  if (route === 'notifications') loadNotifications();
+  if (route === 'notifications') { loadNotifications(); refreshPushStatus(); }
+  if (route === 'friends') loadFriends();
+  if (route === 'sync-center') renderSyncCenter();
   if (route === 'security') loadSessions();
   if (route === 'avatar-tool') drawRoleAvatar();
   if (route === 'banner') drawBanner();
+  if (route === 'admin' && isOnline()) { loadAdminReports(); loadBackups(); }
   if (route === 'admin' && !isOnline()) $('#users').innerHTML = '<p class="offline-note">🟠 Quản trị tài khoản cần mạng. Các công cụ khác vẫn dùng offline được.</p>';
 }
 let routesReady = false;
@@ -211,7 +223,9 @@ function runUiAction(action, el) {
     'load-role-avatar': loadRoleAvatar, 'draw-role-avatar': drawRoleAvatar,
     'load-banner-bg': loadBannerBg, 'load-image-tool': loadImageTool,
     'render-admin-users': renderAdminUsers, 'sync-offline': () => syncOfflineQueue(true),
-    'clear-offline': clearOfflineData, 'change-chat-room': changeChatRoom, 'create-team-post': createTeamPost, 'load-team-posts': loadTeamPosts, 'read-all-notifications': readAllNotifications, 'load-sessions': loadSessions, 'change-password': changePassword
+    'clear-offline': clearOfflineData, 'change-chat-room': changeChatRoom, 'create-team-post': createTeamPost, 'load-team-posts': loadTeamPosts, 'read-all-notifications': readAllNotifications, 'load-sessions': loadSessions, 'change-password': changePassword,
+    'load-friends': loadFriends, 'render-friend-directory': renderFriendDirectory, 'send-dm': sendDM, 'refresh-sync-center': renderSyncCenter,
+    'enable-push': enablePush, 'disable-push': disablePush, 'load-admin-reports': loadAdminReports, 'load-backups': loadBackups
   };
   if (action === 'download-canvas') return downloadCanvas(el.dataset.canvas, el.dataset.filename || 'download.png');
   if (action === 'rotate-image') return rotateImage(Number(el.dataset.deg) || 0);
@@ -224,8 +238,22 @@ function runUiAction(action, el) {
   if (action === 'react-chat') return reactChat(el.dataset.id, el.dataset.emoji);
   if (action === 'close-team-post') return closeTeamPost(el.dataset.id);
   if (action === 'delete-team-post') return deleteTeamPost(el.dataset.id);
-  if (action === 'open-notification') return openNotification(el.dataset.id, el.dataset.route, el.dataset.room);
+  if (action === 'open-notification') return openNotification(el.dataset.id, el.dataset.route, el.dataset.room, el.dataset.dm);
   if (action === 'revoke-session') return revokeSession(el.dataset.id);
+  if (action === 'friend-request') return requestFriend(el.dataset.id);
+  if (action === 'friend-accept') return acceptFriend(el.dataset.id);
+  if (action === 'friend-decline') return declineFriend(el.dataset.id);
+  if (action === 'friend-remove') return removeFriend(el.dataset.id);
+  if (action === 'open-dm') return openDM(el.dataset.id);
+  if (action === 'report-target') return reportTarget(el.dataset.type, el.dataset.id);
+  if (action === 'retry-queue') return retryQueueItem(Number(el.dataset.id));
+  if (action === 'delete-queue') return deleteQueueItemUI(Number(el.dataset.id));
+  if (action === 'resolve-local') return resolveConflictLocal(Number(el.dataset.id));
+  if (action === 'resolve-server') return resolveConflictServer(Number(el.dataset.id));
+  if (action === 'mute-user') return muteUser(el.dataset.id);
+  if (action === 'resolve-report') return resolveReport(el.dataset.id, el.dataset.status || 'resolved');
+  if (action === 'restore-backup') return restoreBackup(el.dataset.file);
+  if (action === 'delete-backup') return deleteBackup(el.dataset.file);
   const fn = actions[action]; if (fn) return fn();
 }
 
@@ -275,14 +303,14 @@ async function show() {
   $('#auth').hidden = true; $('#app').hidden = false;
   $('#adminNav').hidden = !['Boss','Kì Cựu'].includes(me.role);
   renderProfile();
-  await Promise.allSettled([members(), music(), adminUsers(), loadTeamPosts(), loadNotifications()]);
+  await Promise.allSettled([members(), music(), adminUsers(), loadTeamPosts(), loadNotifications(), loadFriends()]);
   setupRoutes(); routeTo(location.hash.slice(1) || 'overview');
   await updateOfflineStatus();
   if (isOnline()) { if ('SyncManager' in window) window.requestBackgroundSync?.(); else syncOfflineQueue(false); }
 }
 
 async function saveProfile() {
-  const payload = { displayName: $('#newName').value, bio: $('#bio').value, games: $('#games').value, gameId: $('#gameId').value, discord: $('#discord').value };
+  const payload = { displayName: $('#newName').value, bio: $('#bio').value, games: $('#games').value, gameId: $('#gameId').value, discord: $('#discord').value, baseUpdatedAt: me?.profileUpdatedAt || '' };
   try {
     const j = await api('/api/profile', { method: 'POST', body: JSON.stringify(payload), queueIfOffline: 'profile' });
     if (j.queued) {
@@ -291,7 +319,13 @@ async function saveProfile() {
       alert('Đã lưu hồ sơ trên thiết bị. Khi có mạng, hệ thống sẽ tự đồng bộ.'); return;
     }
     me = j.user; await snapshotPut('/api/me', { user: me }); renderProfile(); await members(); alert('Đã lưu hồ sơ.');
-  } catch (e) { alert(e.message); }
+  } catch (e) {
+    if (e.httpStatus === 409 && isOnline()) {
+      try { me = (await api('/api/me')).user; await snapshotPut('/api/me', { user: me }); renderProfile(); } catch {}
+      alert('Hồ sơ trên máy chủ đã thay đổi. Mình đã tải bản mới nhất; hãy chỉnh lại rồi lưu.'); return;
+    }
+    alert(e.message);
+  }
 }
 async function uploadAvatar() {
   const f = $('#avatarFile').files[0]; if (!f) return alert('Chọn ảnh trước');
@@ -310,7 +344,7 @@ async function members() {
   try {
     const j = await api('/api/members'); const a = j.members || []; const online = a.filter(u => u.online).length;
     $('#memberCount').textContent = j.__offline ? `Dữ liệu offline • ${a.length} thành viên` : `${online} online / ${a.length} thành viên`;
-    $('#memberList').innerHTML = a.map(u => { const m = meta(u.role); return `<div class="member role-card-${m.key}">${avatarHTML(u)}<span class="dot ${!j.__offline && u.online ? 'on' : ''}" title="${j.__offline ? 'Trạng thái đã lưu' : u.online ? 'Đang online' : 'Offline'}"></span><div class="member-info"><b>${esc(u.displayName)}</b><span class="mini-role ${m.key}">${m.icon} ${m.label}</span><small>${esc(u.games || '')}</small></div></div>`; }).join('');
+    $('#memberList').innerHTML = a.map(u => { const m = meta(u.role); return `<div class="member role-card-${m.key}">${avatarHTML(u)}<span class="dot ${!j.__offline && u.online ? 'on' : ''}" title="${j.__offline ? 'Trạng thái đã lưu' : u.online ? 'Đang online' : 'Offline'}"></span><div class="member-info"><b>${esc(u.displayName)}</b><span class="mini-role ${m.key}">${m.icon} ${m.label}</span><small>${esc(u.games || '')}</small></div>${u.id !== me.id ? `<button class="tiny ghost report-btn" data-action="report-target" data-type="user" data-id="${esc(u.id)}">🚩</button>` : ''}</div>`; }).join('');
   } catch (e) { console.warn(e); }
 }
 
@@ -345,7 +379,7 @@ async function loadChat() {
     const queued = await window.OfflineDB?.listQueue?.() || [];
     const pending = queued.filter(x => x.type === 'chat' && (x.body?.room || 'general') === selectedChatRoom).map(x => ({ id: 'pending-' + x.id, clientId: x.body?.clientId, userId: me.id, username: me.username, displayName: me.displayName, role: me.role, avatar: me.avatar, room:selectedChatRoom, text: x.body?.text || '', replyTo:x.body?.replyTo || '', reactions:{}, createdAt: new Date(x.createdAt).toISOString(), mine: true, pending: true }));
     const all = [...(j.messages || []), ...pending];
-    $('#chatMessages').innerHTML = all.map(m => { const reactions = Object.entries(m.reactions || {}).filter(([,ids]) => ids.length).map(([emoji,ids]) => `<button class="reaction ${ids.includes(me.id)?'mine':''}" data-action="react-chat" data-id="${m.id}" data-emoji="${emoji}" ${m.pending?'disabled':''}>${emoji} ${ids.length}</button>`).join(''); return `<div class="chat-message ${m.mine ? 'mine' : ''} ${m.pending ? 'pending' : ''}">${avatarHTML(m)}<div class="chat-bubble">${m.replyPreview ? `<div class="reply-preview">↪ ${esc(m.replyPreview.displayName)}: ${esc(m.replyPreview.text)}</div>`:''}<div class="chat-head"><b>${esc(m.displayName)}</b><span class="mini-role ${meta(m.role).key}">${meta(m.role).icon} ${esc(m.role)}</span><small>${m.pending ? '⏳ chờ đồng bộ' : fmtDate(m.createdAt)}</small></div><p>${esc(m.text)}</p><div class="chat-actions">${!m.pending?`<button class="tiny ghost" data-action="reply-chat" data-id="${m.id}">↩ Trả lời</button>${['👍','❤️','😂','🔥','🎮'].map(e=>`<button class="tiny ghost" data-action="react-chat" data-id="${m.id}" data-emoji="${e}">${e}</button>`).join('')}`:''}${(m.mine || ['Boss','Kì Cựu'].includes(me.role)) && !m.pending ? `<button class="tiny danger" data-action="delete-chat" data-id="${m.id}">Xóa</button>` : ''}</div><div class="reactions">${reactions}</div></div></div>`; }).join('') || '<p class="muted">Chưa có tin nhắn.</p>';
+    $('#chatMessages').innerHTML = all.map(m => { const reactions = Object.entries(m.reactions || {}).filter(([,ids]) => ids.length).map(([emoji,ids]) => `<button class="reaction ${ids.includes(me.id)?'mine':''}" data-action="react-chat" data-id="${m.id}" data-emoji="${emoji}" ${m.pending?'disabled':''}>${emoji} ${ids.length}</button>`).join(''); return `<div class="chat-message ${m.mine ? 'mine' : ''} ${m.pending ? 'pending' : ''}">${avatarHTML(m)}<div class="chat-bubble">${m.replyPreview ? `<div class="reply-preview">↪ ${esc(m.replyPreview.displayName)}: ${esc(m.replyPreview.text)}</div>`:''}<div class="chat-head"><b>${esc(m.displayName)}</b><span class="mini-role ${meta(m.role).key}">${meta(m.role).icon} ${esc(m.role)}</span><small>${m.pending ? '⏳ chờ đồng bộ' : fmtDate(m.createdAt)}</small></div><p>${esc(m.text)}</p><div class="chat-actions">${!m.pending?`<button class="tiny ghost" data-action="reply-chat" data-id="${m.id}">↩ Trả lời</button>${['👍','❤️','😂','🔥','🎮'].map(e=>`<button class="tiny ghost" data-action="react-chat" data-id="${m.id}" data-emoji="${e}">${e}</button>`).join('')}`:''}${!m.pending && !m.mine ? `<button class="tiny ghost" data-action="report-target" data-type="chat" data-id="${m.id}">🚩 Báo cáo</button>` : ''}${(m.mine || ['Boss','Kì Cựu'].includes(me.role)) && !m.pending ? `<button class="tiny danger" data-action="delete-chat" data-id="${m.id}">Xóa</button>` : ''}</div><div class="reactions">${reactions}</div></div></div>`; }).join('') || '<p class="muted">Chưa có tin nhắn.</p>';
     const box=$('#chatMessages'); box.scrollTop=box.scrollHeight;
   } catch (e) { $('#chatMessages').innerHTML = `<p class="offline-note">${esc(e.message)}</p>`; }
 }
@@ -368,14 +402,53 @@ function setChatReply(id) {
 }
 async function reactChat(id, emoji) { if(!requireOnline('Reaction')) return; try{await api(`/api/chat/${id}/reaction`,{method:'POST',body:JSON.stringify({emoji})}); await loadChat();}catch(e){alert(e.message);} }
 
-async function loadTeamPosts() { if(!me)return; try { const j=await api('/api/team-posts'); const queued=await window.OfflineDB?.listQueue?.()||[]; const pending=queued.filter(x=>x.type==='team').map(x=>({id:'pending-'+x.id,userId:me.id,username:me.username,displayName:me.displayName,role:me.role,avatar:me.avatar,game:x.body?.game||'',mode:x.body?.mode||'',server:x.body?.server||'',playTime:x.body?.playTime||'',slots:x.body?.slots||1,note:x.body?.note||'',status:'pending',createdAt:new Date(x.createdAt).toISOString(),expiresAt:new Date(x.createdAt+(Number(x.body?.expireHours)||24)*3600000).toISOString(),mine:true,pending:true})); const posts=[...(j.posts||[]),...pending]; $('#teamPosts').innerHTML=posts.map(p=>`<article class="team-post ${p.status}">${avatarHTML(p)}<div class="team-main"><div class="team-head"><b>${esc(p.displayName)}</b><span class="mini-role ${meta(p.role).key}">${esc(p.role)}</span><span class="status-pill">${p.status==='pending'?'⏳ Chờ đồng bộ':p.status==='open'?'🟢 Đang tìm':p.status==='expired'?'⌛ Hết hạn':'✅ Đã đủ'}</span></div><h3>${esc(p.game)} ${p.mode?`• ${esc(p.mode)}`:''}</h3><p>${p.server?`🌐 ${esc(p.server)} • `:''}${p.playTime?`🕒 ${esc(p.playTime)} • `:''}👥 Cần ${p.slots}</p><p>${esc(p.note||'')}</p><small>Đăng ${fmtDate(p.createdAt)} • hết hạn ${fmtDate(p.expiresAt)}</small>${!p.pending&&(p.mine||['Boss','Kì Cựu'].includes(me.role))?`<div class="team-actions"><button class="tiny ghost" data-action="close-team-post" data-id="${p.id}">${p.status==='open'?'Đã đủ người':'Mở lại'}</button><button class="tiny danger" data-action="delete-team-post" data-id="${p.id}">Xóa</button></div>`:''}</div></article>`).join('')||'<p class="muted">Chưa có bài tìm đồng đội.</p>'; } catch(e){ $('#teamPosts').innerHTML=`<p class="offline-note">${esc(e.message)}</p>`; } }
+async function loadTeamPosts() { if(!me)return; try { const j=await api('/api/team-posts'); const queued=await window.OfflineDB?.listQueue?.()||[]; const pending=queued.filter(x=>x.type==='team').map(x=>({id:'pending-'+x.id,userId:me.id,username:me.username,displayName:me.displayName,role:me.role,avatar:me.avatar,game:x.body?.game||'',mode:x.body?.mode||'',server:x.body?.server||'',playTime:x.body?.playTime||'',slots:x.body?.slots||1,note:x.body?.note||'',status:'pending',createdAt:new Date(x.createdAt).toISOString(),expiresAt:new Date(x.createdAt+(Number(x.body?.expireHours)||24)*3600000).toISOString(),mine:true,pending:true})); const posts=[...(j.posts||[]),...pending]; $('#teamPosts').innerHTML=posts.map(p=>`<article class="team-post ${p.status}">${avatarHTML(p)}<div class="team-main"><div class="team-head"><b>${esc(p.displayName)}</b><span class="mini-role ${meta(p.role).key}">${esc(p.role)}</span><span class="status-pill">${p.status==='pending'?'⏳ Chờ đồng bộ':p.status==='open'?'🟢 Đang tìm':p.status==='expired'?'⌛ Hết hạn':'✅ Đã đủ'}</span></div><h3>${esc(p.game)} ${p.mode?`• ${esc(p.mode)}`:''}</h3><p>${p.server?`🌐 ${esc(p.server)} • `:''}${p.playTime?`🕒 ${esc(p.playTime)} • `:''}👥 Cần ${p.slots}</p><p>${esc(p.note||'')}</p><small>Đăng ${fmtDate(p.createdAt)} • hết hạn ${fmtDate(p.expiresAt)}</small>${!p.pending?`<div class="team-actions">${!p.mine?`<button class="tiny ghost" data-action="report-target" data-type="team" data-id="${p.id}">🚩 Báo cáo</button>`:''}${(p.mine||['Boss','Kì Cựu'].includes(me.role))?`<button class="tiny ghost" data-action="close-team-post" data-id="${p.id}">${p.status==='open'?'Đã đủ người':'Mở lại'}</button><button class="tiny danger" data-action="delete-team-post" data-id="${p.id}">Xóa</button>`:''}</div>`:''}</div></article>`).join('')||'<p class="muted">Chưa có bài tìm đồng đội.</p>'; } catch(e){ $('#teamPosts').innerHTML=`<p class="offline-note">${esc(e.message)}</p>`; } }
 async function createTeamPost(){ const body={clientId:uid(),game:$('#teamGame').value,mode:$('#teamMode').value,server:$('#teamServer').value,playTime:$('#teamTime').value,slots:Number($('#teamSlots').value)||1,expireHours:Number($('#teamExpire').value)||24,note:$('#teamNote').value}; try{const j=await api('/api/team-posts',{method:'POST',body:JSON.stringify(body),queueIfOffline:'team'}); $('#teamNote').value=''; await loadTeamPosts(); if(j.queued) alert('Đã lưu bài vào hàng đợi. Khi có mạng sẽ tự đăng.');}catch(e){alert(e.message);} }
 async function closeTeamPost(id){if(!requireOnline('Đổi trạng thái bài tìm đồng đội'))return;try{await api(`/api/team-posts/${id}/close`,{method:'POST'});loadTeamPosts();}catch(e){alert(e.message)}}
 async function deleteTeamPost(id){if(!requireOnline('Xóa bài tìm đồng đội'))return;if(!confirm('Xóa bài này?'))return;try{await api(`/api/team-posts/${id}`,{method:'DELETE'});loadTeamPosts();}catch(e){alert(e.message)}}
 
-async function loadNotifications(){ if(!me)return; try{const j=await api('/api/notifications'); const badge=$('#notificationBadge'); if(badge){badge.hidden=!j.unread;badge.textContent=j.unread||0;} $('#notificationList').innerHTML=(j.notifications||[]).map(n=>`<article class="notification-item ${n.read?'read':'unread'}" data-action="open-notification" data-id="${n.id}" data-route="${esc(n.route||'')}" data-room="${esc(n.room||'')}"><div class="notification-icon">${n.type==='achievement'?'🏆':n.type==='mention'?'@':n.type==='reply'?'↩️':n.type==='role'?'👑':'🔔'}</div><div><b>${esc(n.title)}</b><p>${esc(n.message)}</p><small>${fmtDate(n.createdAt)}</small></div></article>`).join('')||'<p class="muted">Chưa có thông báo.</p>'; }catch(e){$('#notificationList').innerHTML=`<p class="offline-note">${esc(e.message)}</p>`;} }
+async function loadNotifications(){ if(!me)return; try{const j=await api('/api/notifications'); const badge=$('#notificationBadge'); if(badge){badge.hidden=!j.unread;badge.textContent=j.unread||0;} const icon=n=>n.type==='achievement'?'🏆':n.type==='mention'?'@':n.type==='reply'?'↩️':n.type==='role'?'👑':n.type==='friend'?'👥':n.type==='dm'?'💬':n.type==='moderation'?'🛡️':'🔔'; $('#notificationList').innerHTML=(j.notifications||[]).map(n=>`<article class="notification-item ${n.read?'read':'unread'}" data-action="open-notification" data-id="${n.id}" data-route="${esc(n.route||'')}" data-room="${esc(n.room||'')}" data-dm="${esc(n.dmUserId||'')}"><div class="notification-icon">${icon(n)}</div><div><b>${esc(n.title)}</b><p>${esc(n.message)}</p><small>${fmtDate(n.createdAt)}</small></div></article>`).join('')||'<p class="muted">Chưa có thông báo.</p>'; }catch(e){$('#notificationList').innerHTML=`<p class="offline-note">${esc(e.message)}</p>`;} }
 async function readAllNotifications(){if(!requireOnline('Đánh dấu thông báo'))return;await api('/api/notifications/read',{method:'POST',body:'{}'});loadNotifications();}
-async function openNotification(id,route,room){ if(isOnline()) await api('/api/notifications/read',{method:'POST',body:JSON.stringify({id})}).catch(()=>{}); if(room){selectedChatRoom=room;if($('#chatRoom'))$('#chatRoom').value=room;} if(route) routeTo(route); else loadNotifications(); }
+async function openNotification(id,route,room,dmUserId=''){ if(isOnline()) await api('/api/notifications/read',{method:'POST',body:JSON.stringify({id})}).catch(()=>{}); if(room){selectedChatRoom=room;if($('#chatRoom'))$('#chatRoom').value=room;} if(dmUserId){selectedDmUserId=dmUserId;routeTo('friends');await loadFriends();await openDM(dmUserId);return;} if(route) routeTo(route); else loadNotifications(); }
+async function enablePush(){try{await window.enablePushNotifications?.();await refreshPushStatus();}catch(e){alert(e.message||'Không thể bật thông báo');}}
+async function disablePush(){try{await window.disablePushNotifications?.();await refreshPushStatus();}catch(e){alert(e.message||'Không thể tắt thông báo');}}
+async function refreshPushStatus(){const el=$('#pushStatus');if(!el)return;try{const s=await window.getPushStatus?.();el.textContent=s?.supported?(s.subscribed?'🟢 Đã bật':s.permission==='denied'?'🔴 Đã chặn':'⚪ Chưa bật'):'Không hỗ trợ';}catch{el.textContent='Không xác định';}}
+
+async function loadFriends(){
+  if(!me)return;
+  try{
+    const [f,m]=await Promise.all([api('/api/friends'),api('/api/members')]);
+    friendsState={friends:f.friends||[],incoming:f.incoming||[],outgoing:f.outgoing||[],members:m.members||[]};
+    renderFriends();
+    if(selectedDmUserId && friendsState.friends.some(x=>x.id===selectedDmUserId)) await loadDM(selectedDmUserId);
+  }catch(e){if($('#friendList'))$('#friendList').innerHTML=`<p class="offline-note">${esc(e.message)}</p>`;}
+}
+function renderFriends(){
+  if(!$('#friendList'))return;
+  $('#incomingFriendRequests').innerHTML=friendsState.incoming.length?friendsState.incoming.map(r=>`<article class="friend-row">${avatarHTML(r.user)}<div class="friend-main"><b>${esc(r.user.displayName||'Thành viên')}</b><small>@${esc(r.user.username||'')}</small></div><button class="tiny" data-action="friend-accept" data-id="${r.id}">Chấp nhận</button><button class="tiny ghost" data-action="friend-decline" data-id="${r.id}">Từ chối</button></article>`).join(''):'<p class="muted">Không có lời mời mới.</p>';
+  $('#friendList').innerHTML=friendsState.friends.length?friendsState.friends.map(u=>`<article class="friend-row">${avatarHTML(u)}<div class="friend-main"><b>${esc(u.displayName)}</b><small>@${esc(u.username)} • ${esc(u.games||'')}</small></div><button class="tiny" data-action="open-dm" data-id="${u.id}">💬 Nhắn tin</button><button class="tiny ghost" data-action="friend-remove" data-id="${u.id}">Hủy bạn</button></article>`).join(''):'<p class="muted">Chưa có bạn bè.</p>';
+  renderFriendDirectory();
+}
+function renderFriendDirectory(){
+  const box=$('#friendDirectory');if(!box||!me)return;
+  const q=($('#friendSearch')?.value||'').trim().toLowerCase(); const friendIds=new Set(friendsState.friends.map(x=>x.id)); const outIds=new Set(friendsState.outgoing.map(x=>x.user?.id)); const inIds=new Set(friendsState.incoming.map(x=>x.user?.id));
+  const list=friendsState.members.filter(u=>u.id!==me.id&&(!q||u.displayName.toLowerCase().includes(q)||u.username.toLowerCase().includes(q))).slice(0,30);
+  box.innerHTML=list.length?list.map(u=>`<article class="friend-row">${avatarHTML(u)}<div class="friend-main"><b>${esc(u.displayName)}</b><small>@${esc(u.username)} • ${esc(u.role)}</small></div>${friendIds.has(u.id)?'<span class="status-pill">Bạn bè</span>':outIds.has(u.id)?'<span class="status-pill">Đã gửi</span>':inIds.has(u.id)?'<span class="status-pill">Đã gửi cho bạn</span>':`<button class="tiny" data-action="friend-request" data-id="${u.id}">+ Kết bạn</button>`}<button class="tiny ghost" data-action="report-target" data-type="user" data-id="${u.id}">🚩</button></article>`).join(''):'<p class="muted">Không tìm thấy thành viên.</p>';
+}
+async function requestFriend(id){if(!requireOnline('Gửi lời mời kết bạn'))return;try{await api(`/api/friends/request/${id}`,{method:'POST',body:'{}'});await loadFriends();}catch(e){alert(e.message)}}
+async function acceptFriend(id){if(!requireOnline('Chấp nhận kết bạn'))return;try{await api(`/api/friends/request/${id}/accept`,{method:'POST',body:'{}'});await loadFriends();}catch(e){alert(e.message)}}
+async function declineFriend(id){if(!requireOnline('Từ chối lời mời'))return;try{await api(`/api/friends/request/${id}`,{method:'DELETE'});await loadFriends();}catch(e){alert(e.message)}}
+async function removeFriend(id){if(!requireOnline('Hủy bạn bè'))return;if(!confirm('Hủy kết bạn?'))return;try{await api(`/api/friends/${id}`,{method:'DELETE'});if(selectedDmUserId===id){selectedDmUserId='';$('#dmMessages').innerHTML='<p class="muted">Chọn một người bạn.</p>';}await loadFriends();}catch(e){alert(e.message)}}
+async function openDM(id){selectedDmUserId=id;const u=friendsState.friends.find(x=>x.id===id);if(!u)return;$('#dmHeader').textContent=`💬 ${u.displayName}`;$('#dmState').textContent=isOnline()?'Online':'Offline • chờ đồng bộ';await loadDM(id);$('#dmInput')?.focus();}
+async function loadDM(id=selectedDmUserId){if(!id||!me)return;try{const j=await api(`/api/dm/${encodeURIComponent(id)}`);const queued=await window.OfflineDB?.listQueue?.()||[];const pending=queued.filter(x=>x.type==='dm'&&x.url===`/api/dm/${id}`).map(x=>({id:'pending-'+x.id,userId:me.id,toUserId:id,displayName:me.displayName,role:me.role,avatar:me.avatar,text:x.body?.text||'',createdAt:new Date(x.createdAt).toISOString(),mine:true,pending:true}));const all=[...(j.messages||[]),...pending];$('#dmMessages').innerHTML=all.map(m=>`<div class="chat-message ${m.mine?'mine':''} ${m.pending?'pending':''}">${avatarHTML(m)}<div class="chat-bubble"><div class="chat-head"><b>${esc(m.displayName)}</b><small>${m.pending?'⏳ chờ đồng bộ':fmtDate(m.createdAt)}</small></div><p>${esc(m.text)}</p>${!m.mine&&!m.pending?`<button class="tiny ghost" data-action="report-target" data-type="dm" data-id="${m.id}">🚩 Báo cáo</button>`:''}</div></div>`).join('')||'<p class="muted">Chưa có tin nhắn riêng.</p>';const b=$('#dmMessages');b.scrollTop=b.scrollHeight;}catch(e){$('#dmMessages').innerHTML=`<p class="offline-note">${esc(e.message)}</p>`;}}
+async function sendDM(){if(!selectedDmUserId)return alert('Chọn một người bạn trước.');const input=$('#dmInput'),text=input.value.trim();if(!text)return;try{const j=await api(`/api/dm/${selectedDmUserId}`,{method:'POST',body:JSON.stringify({text,clientId:uid()}),queueIfOffline:'dm'});input.value='';await loadDM(selectedDmUserId);if(j.queued)await updateOfflineStatus();}catch(e){alert(e.message)}}
+async function reportTarget(type,id){if(!requireOnline('Gửi báo cáo'))return;const reason=prompt('Lý do báo cáo:','');if(!reason||reason.trim().length<3)return;try{await api('/api/reports',{method:'POST',body:JSON.stringify({targetType:type,targetId:id,reason})});alert('Đã gửi báo cáo tới quản trị viên.');}catch(e){alert(e.message)}}
+
+async function renderSyncCenter(){const box=$('#syncQueueList');if(!box)return;let items=[];try{items=await window.OfflineDB?.listQueue?.()||[];}catch{}const label={profile:'Hồ sơ',avatar:'Avatar',chat:'Chat',team:'Tìm đồng đội',music:'Âm nhạc',dm:'Tin nhắn riêng'};box.innerHTML=items.length?items.map(x=>`<article class="sync-row ${esc(x.status||'pending')}"><div><b>${x.status==='conflict'?'⚔️ Xung đột':x.status==='error'?'⚠️ Lỗi':'⏳ Chờ'} • ${esc(label[x.type]||x.type)}</b><p>${esc(x.lastError||'Sẵn sàng đồng bộ khi có mạng.')}</p><small>${fmtDate(x.createdAt)}${x.retries?` • thử ${x.retries} lần`:''}</small></div><div class="sync-actions">${x.status==='conflict'?`<button class="tiny" data-action="resolve-local" data-id="${x.id}">Giữ bản thiết bị</button><button class="tiny ghost" data-action="resolve-server" data-id="${x.id}">Giữ bản máy chủ</button>`:`<button class="tiny ghost" data-action="retry-queue" data-id="${x.id}">Thử lại</button>`}<button class="tiny danger" data-action="delete-queue" data-id="${x.id}">Hủy</button></div></article>`).join(''):'<p class="muted">✅ Không có thao tác chờ đồng bộ.</p>';}
+async function retryQueueItem(id){await window.OfflineDB?.updateQueue?.(id,{status:'pending',lastError:''});await renderSyncCenter();if(isOnline())await syncOfflineQueue(false);}
+async function deleteQueueItemUI(id){if(!confirm('Hủy thao tác đang chờ này?'))return;await window.OfflineDB?.deleteQueue?.(id);await updateOfflineStatus();}
+async function resolveConflictLocal(id){const items=await window.OfflineDB?.listQueue?.()||[];const item=items.find(x=>x.id===id);if(!item)return;await window.OfflineDB.updateQueue(id,{status:'pending',lastError:'',body:{...(item.body||{}),force:true}});await syncOfflineQueue(true);}
+async function resolveConflictServer(id){const items=await window.OfflineDB?.listQueue?.()||[];const item=items.find(x=>x.id===id);if(!item)return;const current=item.conflictData?.current;if(current){me=current;await snapshotPut('/api/me',{user:me});renderProfile();}await window.OfflineDB.deleteQueue(id);await updateOfflineStatus();alert('Đã giữ bản hồ sơ trên máy chủ.');}
 
 async function loadSessions(){if(!me||!isOnline()){if($('#sessionList'))$('#sessionList').innerHTML='<p class="offline-note">Quản lý phiên cần mạng.</p>';return;}try{const j=await api('/api/security/sessions');$('#sessionList').innerHTML=(j.sessions||[]).map(s=>`<article class="session-item"><div><b>${s.current?'🟢 Thiết bị hiện tại':'📱 Phiên đăng nhập'}</b><p>${esc(s.userAgent)}</p><small>IP ${esc(s.ip||'-')} • hoạt động ${fmtDate(s.lastSeen)}</small></div>${!s.current?`<button class="tiny danger" data-action="revoke-session" data-id="${s.id}">Đăng xuất</button>`:''}</article>`).join('')||'<p class="muted">Không có phiên.</p>';}catch(e){$('#sessionList').innerHTML=`<p class="offline-note">${esc(e.message)}</p>`;}}
 async function revokeSession(id){if(!requireOnline('Đăng xuất thiết bị'))return;try{await api(`/api/security/sessions/${id}/revoke`,{method:'POST'});loadSessions();}catch(e){alert(e.message)}}
@@ -389,7 +462,7 @@ async function adminUsers() {
 function renderAdminUsers() {
   if (!$('#users') || !me || !['Boss','Kì Cựu'].includes(me.role)) return;
   const q = ($('#adminSearch')?.value || '').trim().toLowerCase(); const a = adminCache.filter(u => !q || u.displayName.toLowerCase().includes(q) || u.username.toLowerCase().includes(q));
-  $('#users').innerHTML = a.length ? a.map(u => { const m = meta(u.role); return `<div class="user role-card-${m.key}">${avatarHTML(u)}<div class="member-info"><b>${esc(u.displayName)}</b><small>@${esc(u.username)}</small><span class="mini-role ${m.key}">${m.icon} ${m.label}${u.banned ? ' • ⛔ BANNED' : ''}</span><small>${(u.achievements || []).length} thành tích</small></div><div class="admin-actions">${me.role === 'Boss' ? `<select data-change-action="set-role" data-id="${esc(u.id)}" aria-label="Đổi role"><option value="${esc(u.role)}">${esc(u.role)}</option>${['Boss','Kì Cựu','Member'].filter(r => r !== u.role).map(r => `<option value="${r}">${r}</option>`).join('')}</select>` : ''}<button data-action="add-achievement" data-id="${esc(u.id)}">🏆 Thành tích</button><button class="${u.banned ? 'unban' : 'ban'}" data-action="ban-user" data-id="${esc(u.id)}" data-banned="${!u.banned}">${u.banned ? 'Mở cấm' : 'Cấm'}</button></div></div>`; }).join('') : '<p class="muted">Không tìm thấy thành viên phù hợp.</p>';
+  $('#users').innerHTML = a.length ? a.map(u => { const m = meta(u.role); const muted=u.muteUntil&&new Date(u.muteUntil).getTime()>Date.now(); return `<div class="user role-card-${m.key}">${avatarHTML(u)}<div class="member-info"><b>${esc(u.displayName)}</b><small>@${esc(u.username)}</small><span class="mini-role ${m.key}">${m.icon} ${m.label}${u.banned ? ' • ⛔ BANNED' : ''}${muted?' • 🔇 TIMEOUT':''}</span><small>${(u.achievements || []).length} thành tích${muted?` • đến ${fmtDate(u.muteUntil)}`:''}</small></div><div class="admin-actions">${me.role === 'Boss' ? `<select data-change-action="set-role" data-id="${esc(u.id)}" aria-label="Đổi role"><option value="${esc(u.role)}">${esc(u.role)}</option>${['Boss','Kì Cựu','Member'].filter(r => r !== u.role).map(r => `<option value="${r}">${r}</option>`).join('')}</select>` : ''}<button data-action="add-achievement" data-id="${esc(u.id)}">🏆 Thành tích</button><button class="ghost" data-action="mute-user" data-id="${esc(u.id)}">${muted?'🔊 Gỡ Timeout':'🔇 Timeout'}</button><button class="${u.banned ? 'unban' : 'ban'}" data-action="ban-user" data-id="${esc(u.id)}" data-banned="${!u.banned}">${u.banned ? 'Mở cấm' : 'Cấm'}</button></div></div>`; }).join('') : '<p class="muted">Không tìm thấy thành viên phù hợp.</p>';
 }
 async function addAchievement(id) {
   if (!requireOnline('Trao thành tích')) return;
@@ -403,7 +476,13 @@ async function loadLogs() {
 }
 async function setRole(id, role) { if (!requireOnline('Đổi Role')) return; await api('/api/admin/user/' + id, { method: 'POST', body: JSON.stringify({ role }) }); if (id === me.id) me = (await api('/api/me')).user; renderProfile(); await Promise.all([adminUsers(), members()]); }
 async function ban(id, banned) { if (!requireOnline('Cấm/Mở cấm')) return; if (id === me.id && !confirm('Bạn đang thao tác trên chính tài khoản của mình. Tiếp tục?')) return; await api('/api/admin/user/' + id, { method: 'POST', body: JSON.stringify({ banned }) }); await Promise.all([adminUsers(), members()]); }
-async function backup() { if (!requireOnline('Backup')) return; const j = await api('/api/backup', { method: 'POST' }); alert('Đã backup: ' + j.file); }
+async function backup() { if (!requireOnline('Backup')) return; const j = await api('/api/backup', { method: 'POST' }); alert('Đã backup: ' + j.file); await loadBackups(); }
+async function muteUser(id){if(!requireOnline('Timeout'))return;const u=adminCache.find(x=>x.id===id);const active=u?.muteUntil&&new Date(u.muteUntil).getTime()>Date.now();if(active){if(!confirm(`Gỡ Timeout cho ${u.displayName}?`))return;await api(`/api/admin/user/${id}/mute`,{method:'POST',body:JSON.stringify({minutes:0})});await adminUsers();return;}const raw=prompt('Timeout bao nhiêu phút? (tối đa 10080 = 7 ngày)','30');if(raw==null)return;const minutes=Number(raw);if(!Number.isFinite(minutes)||minutes<=0)return alert('Số phút không hợp lệ.');const reason=prompt('Lý do Timeout:','Spam / vi phạm nội quy')||'';try{await api(`/api/admin/user/${id}/mute`,{method:'POST',body:JSON.stringify({minutes,reason})});await adminUsers();}catch(e){alert(e.message)}}
+async function loadAdminReports(){if(!me||!['Boss','Kì Cựu'].includes(me.role)||!isOnline())return;try{const j=await api('/api/admin/reports');$('#adminReports').innerHTML=(j.reports||[]).map(r=>`<article class="report-row ${r.status}"><div><b>🚩 ${esc(r.targetType)} • ${esc(r.status)}</b><p>${esc(r.reason)}</p><small>@${esc(r.reporterUsername||'')} • ${fmtDate(r.createdAt)}${r.resolvedBy?` • xử lý bởi ${esc(r.resolvedBy)}`:''}</small></div>${r.status==='open'?`<div class="report-actions"><button class="tiny" data-action="resolve-report" data-id="${r.id}" data-status="resolved">Đã xử lý</button><button class="tiny ghost" data-action="resolve-report" data-id="${r.id}" data-status="dismissed">Bỏ qua</button></div>`:''}</article>`).join('')||'<p class="muted">Không có báo cáo.</p>';}catch(e){$('#adminReports').innerHTML=`<p class="offline-note">${esc(e.message)}</p>`;}}
+async function resolveReport(id,status){if(!requireOnline('Xử lý báo cáo'))return;try{await api(`/api/admin/reports/${id}/resolve`,{method:'POST',body:JSON.stringify({status})});await loadAdminReports();}catch(e){alert(e.message)}}
+async function loadBackups(){if(!me||!['Boss','Kì Cựu'].includes(me.role)||!isOnline())return;try{const j=await api('/api/backups');$('#backupPolicy').textContent=`Mỗi ${j.autoHours}h • giữ ${j.keep} bản`;$('#backupList').innerHTML=(j.backups||[]).map(b=>`<article class="backup-row"><div><b>${esc(b.file)}</b><p>${(b.size/1024).toFixed(1)} KB</p><small>${fmtDate(b.createdAt)}</small></div><div class="backup-actions"><button class="tiny" data-action="restore-backup" data-file="${esc(b.file)}">Khôi phục</button><button class="tiny danger" data-action="delete-backup" data-file="${esc(b.file)}">Xóa</button></div></article>`).join('')||'<p class="muted">Chưa có backup.</p>';}catch(e){$('#backupList').innerHTML=`<p class="offline-note">${esc(e.message)}</p>`;}}
+async function restoreBackup(file){if(!requireOnline('Khôi phục backup'))return;if(!confirm(`Khôi phục ${file}? Hệ thống sẽ tự tạo một backup an toàn trước khi restore.`))return;const password=prompt('Nhập mật khẩu hiện tại để xác nhận Restore:','');if(!password)return;try{const j=await api(`/api/backups/${encodeURIComponent(file)}/restore`,{method:'POST',body:JSON.stringify({password})});alert(`Đã khôi phục ${j.restored}. Backup an toàn: ${j.safetyBackup}. Trang sẽ tải lại.`);location.reload();}catch(e){alert(e.message)}}
+async function deleteBackup(file){if(!requireOnline('Xóa backup'))return;if(!confirm(`Xóa ${file}?`))return;try{await api(`/api/backups/${encodeURIComponent(file)}`,{method:'DELETE'});await loadBackups();}catch(e){alert(e.message)}}
 
 function readImage(file, cb) { const reader = new FileReader(); reader.onload = () => { const img = new Image(); img.onload = () => cb(img); img.src = reader.result; }; reader.readAsDataURL(file); }
 function downloadCanvas(id, filename) { const c = document.getElementById(id); if (!c) return; const a = document.createElement('a'); a.href = c.toDataURL('image/png'); a.download = filename; a.click(); }
@@ -498,7 +577,7 @@ setInterval(() => { if (me && isOnline()) fetch('/api/ping', { method: 'POST', c
 setInterval(() => { if (me && isOnline()) loadNotifications(); }, 30000);
 
 window.addEventListener('online', async () => { await updateOfflineStatus(); startChatTimer(); if ('SyncManager' in window) window.requestBackgroundSync?.(); else await syncOfflineQueue(false); });
-window.addEventListener('offline', async () => { stopChatTimer(); await updateOfflineStatus(); if (me) { members(); music(); loadChat(); } });
+window.addEventListener('offline', async () => { stopChatTimer(); await updateOfflineStatus(); if (me) { members(); music(); loadChat(); loadFriends(); } });
 window.addEventListener('error', event => console.error('UI error:', event.error || event.message));
 window.addEventListener('unhandledrejection', event => console.error('Promise error:', event.reason));
 setupInteractions();

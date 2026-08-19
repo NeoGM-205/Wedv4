@@ -1,4 +1,4 @@
-const VERSION = '1.4.0';
+const VERSION = '1.5.0';
 const APP_CACHE = `giatoc-app-${VERSION}`;
 const RUNTIME_CACHE = `giatoc-runtime-${VERSION}`;
 const DB_NAME = 'giatoc-name-hub-offline';
@@ -9,10 +9,10 @@ const CORE_ASSETS = [
   '/index.html',
   '/offline.html',
   '/manifest.webmanifest',
-  '/style.css?v=1.4.0',
-  '/offline-db.js?v=1.4.0',
-  '/app.js?v=1.4.0',
-  '/pwa.js?v=1.4.0',
+  '/style.css?v=1.5.0',
+  '/offline-db.js?v=1.5.0',
+  '/app.js?v=1.5.0',
+  '/pwa.js?v=1.5.0',
   '/assets/avatar-boss.svg',
   '/assets/avatar-elder.svg',
   '/assets/avatar-member.svg',
@@ -21,7 +21,7 @@ const CORE_ASSETS = [
   '/icons/maskable-192.png',
   '/icons/maskable-512.png'
 ];
-const OPTIONAL_ASSETS = ['/vendor/qrcode.bundle.js?v=1.4.0', '/vendor/pdf-lib.min.js?v=1.4.0'];
+const OPTIONAL_ASSETS = ['/vendor/qrcode.bundle.js?v=1.5.0', '/vendor/pdf-lib.min.js?v=1.5.0'];
 
 async function cacheAppShell() {
   const cache = await caches.open(APP_CACHE);
@@ -153,6 +153,7 @@ async function syncQueue() {
   const items = await queueItems();
   let done = 0;
   for (const item of items) {
+    if (item.status === 'conflict') continue;
     let response;
     try {
       if (item.type === 'avatar' && item.fileBlob) {
@@ -169,9 +170,14 @@ async function syncQueue() {
       }
       if (response.status === 401 || response.status === 403) break;
       if (!response.ok) {
+        if (response.status === 409 && item.type === 'profile') {
+          const conflictData = await response.json().catch(() => ({}));
+          await updateQueueItem(item.id, { status: 'conflict', conflictData, lastError: conflictData.error || 'Xung đột hồ sơ', lastTriedAt: Date.now() });
+          continue;
+        }
         if (response.status >= 400 && response.status < 500 && response.status !== 429) {
-          await deleteQueueItem(item.id);
-          done++;
+          const detail = await response.json().catch(() => ({}));
+          await updateQueueItem(item.id, { status: 'error', retries: (item.retries || 0) + 1, lastError: detail.error || `HTTP ${response.status}`, lastTriedAt: Date.now() });
           continue;
         }
         throw new Error(`HTTP ${response.status}`);
@@ -188,6 +194,31 @@ async function syncQueue() {
 
 self.addEventListener('sync', event => {
   if (event.tag === 'giatoc-sync') event.waitUntil(syncQueue());
+});
+
+self.addEventListener('push', event => {
+  let data = {};
+  try { data = event.data?.json?.() || {}; } catch { data = { body: event.data?.text?.() || 'Bạn có thông báo mới.' }; }
+  const route = data.route || 'notifications';
+  const url = data.dmUserId ? `/#friends` : data.room ? `/#chat` : `/#${route}`;
+  event.waitUntil(self.registration.showNotification(data.title || 'GiaTộc ┊Name Hub', {
+    body: data.body || 'Bạn có thông báo mới.',
+    icon: '/icons/icon-192.png',
+    badge: '/icons/favicon-32.png',
+    tag: data.dmUserId ? `dm-${data.dmUserId}` : undefined,
+    data: { url, route, room: data.room || '', dmUserId: data.dmUserId || '' }
+  }));
+});
+self.addEventListener('notificationclick', event => {
+  event.notification.close();
+  const target = event.notification.data?.url || '/#notifications';
+  event.waitUntil((async () => {
+    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const client of windows) {
+      if ('focus' in client) { await client.navigate(target).catch(()=>{}); return client.focus(); }
+    }
+    return self.clients.openWindow(target);
+  })());
 });
 
 self.addEventListener('message', event => {

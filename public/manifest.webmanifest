@@ -2,7 +2,7 @@
   "id": "/",
   "name": "GiaTộc ┊Name Hub",
   "short_name": "GiaTộc Name",
-  "description": "GiaTộc ┊Name Hub v1.4: hồ sơ, thông báo, chat nâng cao, tìm đồng đội, công cụ cộng đồng và offline.",
+  "description": "GiaTộc ┊Name Hub v1.5: bạn bè & DM, push notification, báo cáo/timeout, backup/restore, offline queue và công cụ cộng đồng.",
   "lang": "vi",
   "dir": "ltr",
   "start_url": "/#overview",
@@ -106,6 +106,17 @@
       "name": "Thông báo",
       "short_name": "Thông báo",
       "url": "/#notifications",
+      "icons": [
+        {
+          "src": "/icons/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    },
+    {
+      "name": "Bạn bè & Tin nhắn riêng",
+      "short_name": "Bạn bè",
+      "url": "/#friends",
       "icons": [
         {
           "src": "/icons/icon-192.png",

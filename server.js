@@ -9,6 +9,7 @@ import path from 'path';
 import crypto from 'crypto';
 import QRCode from 'qrcode';
 import { PDFDocument } from 'pdf-lib';
+import webpush from 'web-push';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -29,6 +30,28 @@ for (const dir of [storageRoot, dataDir, backupDir, uploadDir, sessionDir]) fs.m
 const dbPath = path.join(dataDir, 'db.json');
 const sessionStorePath = path.join(sessionDir, 'sessions.json');
 const sessionSecretPath = path.join(storageRoot, '.session-secret');
+const vapidKeyPath = path.join(storageRoot, 'vapid-keys.json');
+
+function getVapidKeys() {
+  if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
+    return { publicKey: process.env.VAPID_PUBLIC_KEY, privateKey: process.env.VAPID_PRIVATE_KEY };
+  }
+  try {
+    if (fs.existsSync(vapidKeyPath)) {
+      const saved = JSON.parse(fs.readFileSync(vapidKeyPath, 'utf8'));
+      if (saved?.publicKey && saved?.privateKey) return saved;
+    }
+    const keys = webpush.generateVAPIDKeys();
+    fs.writeFileSync(vapidKeyPath, JSON.stringify(keys, null, 2), { mode: 0o600 });
+    return keys;
+  } catch (error) {
+    console.error('[Push] Không thể lưu VAPID key:', error.message);
+    return webpush.generateVAPIDKeys();
+  }
+}
+const vapidKeys = getVapidKeys();
+const vapidSubject = process.env.VAPID_SUBJECT || process.env.PUBLIC_ORIGIN || 'https://giatoc-name-hub.robloxdatgaming.chatgpt.site';
+webpush.setVapidDetails(vapidSubject, vapidKeys.publicKey, vapidKeys.privateKey);
 
 function getSessionSecret() {
   if (process.env.SESSION_SECRET) return process.env.SESSION_SECRET;
@@ -140,8 +163,13 @@ function migrateDirectoryOnce(sourceDir, targetDir) {
 }
 migrateDirectoryOnce(path.join(__dirname, 'public', 'uploads'), uploadDir);
 migrateDirectoryOnce(path.join(__dirname, 'backups'), backupDir);
-const defaultDb = { users: [], music: [], logs: [], chat: [], notifications: [], teamPosts: [] };
-const normalizeDb = db => ({ ...defaultDb, ...(db || {}), users: db?.users || [], music: db?.music || [], logs: db?.logs || [], chat: db?.chat || [], notifications: db?.notifications || [], teamPosts: db?.teamPosts || [] });
+const defaultDb = { users: [], music: [], logs: [], chat: [], notifications: [], teamPosts: [], friendRequests: [], directMessages: [], reports: [], pushSubscriptions: [] };
+const normalizeDb = db => ({
+  ...defaultDb, ...(db || {}),
+  users: db?.users || [], music: db?.music || [], logs: db?.logs || [], chat: db?.chat || [],
+  notifications: db?.notifications || [], teamPosts: db?.teamPosts || [], friendRequests: db?.friendRequests || [],
+  directMessages: db?.directMessages || [], reports: db?.reports || [], pushSubscriptions: db?.pushSubscriptions || []
+});
 const load = () => { try { return normalizeDb(JSON.parse(fs.readFileSync(dbPath, 'utf8'))); } catch { return structuredClone(defaultDb); } };
 const save = db => fs.writeFileSync(dbPath, JSON.stringify(normalizeDb(db), null, 2));
 if (!fs.existsSync(dbPath)) save(defaultDb);
@@ -197,7 +225,10 @@ function safeUser(u) {
     games: u.games || '',
     gameId: u.gameId || '',
     discord: u.discord || '',
-    achievements: Array.isArray(u.achievements) ? u.achievements : []
+    achievements: Array.isArray(u.achievements) ? u.achievements : [],
+    profileUpdatedAt: u.profileUpdatedAt || u.createdAt || null,
+    muteUntil: u.muteUntil || null,
+    muteReason: u.muteReason || ''
   };
 }
 function auth(req, res, next) {
@@ -216,15 +247,54 @@ function admin(req, res, next) {
 function addLog(db, action, extra = {}) { db.logs.push({ at: new Date().toISOString(), action, ...extra }); }
 function notifyUser(db, userId, type, title, message, extra = {}) {
   if (!userId) return;
-  db.notifications.push({ id: crypto.randomUUID(), userId, type, title: cleanText(title, 100), message: cleanText(message, 240), read: false, createdAt: new Date().toISOString(), ...extra });
+  const notification = { id: crypto.randomUUID(), userId, type, title: cleanText(title, 100), message: cleanText(message, 240), read: false, createdAt: new Date().toISOString(), ...extra };
+  db.notifications.push(notification);
   if (db.notifications.length > 2000) db.notifications = db.notifications.slice(-2000);
+  setImmediate(() => sendPushToUser(userId, { title: notification.title, body: notification.message, route: notification.route || 'notifications', room: notification.room || '', dmUserId: notification.dmUserId || '' }).catch(()=>{}));
 }
 function sessionToken(sid) { return crypto.createHash('sha256').update(sid).digest('hex').slice(0, 20); }
 function requestMeta(req) { return { userAgent: cleanText(req.get('user-agent') || 'Thiết bị không xác định', 180), ip: cleanText(req.ip || '', 80), lastSeen: new Date().toISOString() }; }
+function isMuted(user) { return !!(user?.muteUntil && new Date(user.muteUntil).getTime() > Date.now()); }
+function ensureCanCommunicate(user, res) {
+  if (!isMuted(user)) return true;
+  res.status(403).json({ error: `Bạn đang bị tạm hạn chế đến ${new Date(user.muteUntil).toLocaleString('vi-VN')}${user.muteReason ? ` • ${user.muteReason}` : ''}` });
+  return false;
+}
+function areFriends(db, a, b) {
+  return db.friendRequests.some(r => r.status === 'accepted' && ((r.fromUserId === a && r.toUserId === b) || (r.fromUserId === b && r.toUserId === a)));
+}
+function backupNameSafe(name) { return /^db-[0-9T-]+Z?\.json$/i.test(String(name || '')) ? path.basename(String(name)) : ''; }
+function createBackupFile() {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const file = path.join(backupDir, `db-${stamp}.json`);
+  fs.copyFileSync(dbPath, file);
+  const keep = Math.max(5, Math.min(100, Number(process.env.BACKUP_KEEP || 30)));
+  const files = fs.readdirSync(backupDir).filter(f => /^db-.*\.json$/i.test(f)).map(f => ({ f, t: fs.statSync(path.join(backupDir, f)).mtimeMs })).sort((a,b)=>b.t-a.t);
+  for (const old of files.slice(keep)) { try { fs.unlinkSync(path.join(backupDir, old.f)); } catch {} }
+  return path.basename(file);
+}
+async function sendPushToUser(userId, payload = {}) {
+  const db = load();
+  const subs = db.pushSubscriptions.filter(s => s.userId === userId);
+  if (!subs.length) return;
+  const stale = new Set();
+  await Promise.allSettled(subs.map(async sub => {
+    try {
+      await webpush.sendNotification({ endpoint: sub.endpoint, expirationTime: sub.expirationTime || null, keys: sub.keys }, JSON.stringify(payload), { TTL: 60 * 60 * 12 });
+    } catch (error) {
+      if ([404, 410].includes(error?.statusCode)) stale.add(sub.endpoint);
+      else console.warn('[Push] send failed:', error?.statusCode || error?.message || error);
+    }
+  }));
+  if (stale.size) {
+    db.pushSubscriptions = db.pushSubscriptions.filter(s => !stale.has(s.endpoint));
+    save(db);
+  }
+}
 
 app.get('/api/health', (req, res) => res.json({
   ok: true,
-  version: '1.4.0',
+  version: '1.5.0',
   storage: { root: storageRoot, data: dataDir, uploads: uploadDir, backups: backupDir }
 }));
 
@@ -238,7 +308,7 @@ app.post('/api/register', async (req, res) => {
   const first = db.users.length === 0;
   const u = {
     id: crypto.randomUUID(), username, displayName, passwordHash: await bcrypt.hash(password, 12), role: first ? 'Boss' : 'Member', avatar: '', banned: false,
-    bio: '', games: '', gameId: '', discord: '', achievements: [], createdAt: new Date().toISOString(), lastSeen: new Date().toISOString()
+    bio: '', games: '', gameId: '', discord: '', achievements: [], muteUntil: null, muteReason: '', createdAt: new Date().toISOString(), profileUpdatedAt: new Date().toISOString(), lastSeen: new Date().toISOString()
   };
   db.users.push(u);
   addLog(db, 'register', { user: u.username });
@@ -267,11 +337,16 @@ app.get('/api/me', auth, (req, res) => res.json({ user: safeUser(req.user) }));
 app.post('/api/profile', auth, (req, res) => {
   const db = load();
   const u = db.users.find(x => x.id === req.user.id);
+  const baseUpdatedAt = cleanText(req.body.baseUpdatedAt, 80);
+  if (!req.body.force && baseUpdatedAt && u.profileUpdatedAt && baseUpdatedAt !== u.profileUpdatedAt) {
+    return res.status(409).json({ error: 'Hồ sơ đã thay đổi trên máy chủ trong lúc bạn offline.', conflict: true, current: safeUser(u) });
+  }
   u.displayName = cleanText(req.body.displayName || u.displayName, 40);
   u.bio = cleanText(req.body.bio, 300);
   u.games = cleanText(req.body.games, 160);
   u.gameId = cleanText(req.body.gameId, 100);
   u.discord = cleanText(req.body.discord, 100);
+  u.profileUpdatedAt = new Date().toISOString();
   save(db);
   res.json({ user: safeUser(u) });
 });
@@ -314,6 +389,7 @@ app.get('/api/chat', auth, (req, res) => {
   res.json({ room, messages });
 });
 app.post('/api/chat', auth, chatLimiter, (req, res) => {
+  if (!ensureCanCommunicate(req.user, res)) return;
   const text = cleanText(req.body.text, 500);
   const clientId = cleanText(req.body.clientId, 100);
   const room = cleanText(req.body.room || 'general', 40) || 'general';
@@ -400,14 +476,128 @@ app.delete('/api/admin/user/:id/achievement/:achievementId', auth, admin, (req, 
 });
 app.get('/api/admin/logs', auth, admin, (req, res) => res.json({ logs: load().logs.slice(-100).reverse() }));
 app.post('/api/backup', auth, admin, (req, res) => {
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const f = path.join(backupDir, `db-${stamp}.json`);
-  fs.copyFileSync(dbPath, f);
-  res.json({ ok: true, file: path.basename(f) });
+  const file = createBackupFile();
+  const db = load(); addLog(db, 'backup_create', { by: req.user.username, file }); save(db);
+  res.json({ ok: true, file });
+});
+app.get('/api/backups', auth, admin, (req, res) => {
+  const backups = fs.readdirSync(backupDir).filter(f => /^db-.*\.json$/i.test(f)).map(file => {
+    const st = fs.statSync(path.join(backupDir, file));
+    return { file, size: st.size, createdAt: st.mtime.toISOString() };
+  }).sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt));
+  res.json({ backups, autoHours: Math.max(1, Number(process.env.AUTO_BACKUP_HOURS || 6)), keep: Math.max(5, Number(process.env.BACKUP_KEEP || 30)) });
+});
+app.post('/api/backups/:file/restore', auth, admin, loginLimiter, async (req, res) => {
+  const file = backupNameSafe(req.params.file); if (!file) return res.status(400).json({ error: 'Tên backup không hợp lệ' });
+  const db = load(); const actor = db.users.find(u => u.id === req.user.id);
+  if (!actor || !await bcrypt.compare(String(req.body.password || ''), actor.passwordHash)) return res.status(401).json({ error: 'Mật khẩu xác nhận không đúng' });
+  const full = path.join(backupDir, file); if (!fs.existsSync(full)) return res.status(404).json({ error: 'Không tìm thấy backup' });
+  try {
+    const restored = normalizeDb(JSON.parse(fs.readFileSync(full, 'utf8')));
+    const safety = createBackupFile();
+    fs.writeFileSync(dbPath, JSON.stringify(restored, null, 2));
+    const after = load(); addLog(after, 'backup_restore', { by: req.user.username, file, safety }); save(after);
+    res.json({ ok: true, restored: file, safetyBackup: safety });
+  } catch { res.status(400).json({ error: 'Backup bị lỗi hoặc không đọc được' }); }
+});
+app.delete('/api/backups/:file', auth, admin, (req, res) => {
+  const file = backupNameSafe(req.params.file); if (!file) return res.status(400).json({ error: 'Tên backup không hợp lệ' });
+  const full = path.join(backupDir, file); if (!fs.existsSync(full)) return res.status(404).json({ error: 'Không tìm thấy backup' });
+  fs.unlinkSync(full); const db = load(); addLog(db, 'backup_delete', { by: req.user.username, file }); save(db); res.json({ ok: true });
 });
 
+// ===== Push Notifications v1.5 =====
+app.get('/api/push/vapid-public-key', auth, (req, res) => res.json({ publicKey: vapidKeys.publicKey }));
+app.post('/api/push/subscribe', auth, (req, res) => {
+  const sub = req.body?.subscription;
+  if (!sub?.endpoint || !sub?.keys?.p256dh || !sub?.keys?.auth) return res.status(400).json({ error: 'Push subscription không hợp lệ' });
+  const db = load();
+  db.pushSubscriptions = db.pushSubscriptions.filter(x => x.endpoint !== sub.endpoint);
+  db.pushSubscriptions.push({ id: crypto.randomUUID(), userId: req.user.id, endpoint: sub.endpoint, expirationTime: sub.expirationTime || null, keys: sub.keys, userAgent: cleanText(req.get('user-agent'), 180), createdAt: new Date().toISOString() });
+  save(db); res.json({ ok: true });
+});
+app.post('/api/push/unsubscribe', auth, (req, res) => {
+  const endpoint = cleanText(req.body?.endpoint, 2000); const db = load();
+  db.pushSubscriptions = db.pushSubscriptions.filter(s => !(s.userId === req.user.id && (!endpoint || s.endpoint === endpoint)));
+  save(db); res.json({ ok: true });
+});
 
-// ===== Notifications v1.4 =====
+// ===== Friends & Direct Messages v1.5 =====
+app.get('/api/friends', auth, (req, res) => {
+  const db = load();
+  const accepted = db.friendRequests.filter(r => r.status === 'accepted' && (r.fromUserId === req.user.id || r.toUserId === req.user.id));
+  const friendIds = accepted.map(r => r.fromUserId === req.user.id ? r.toUserId : r.fromUserId);
+  const friends = friendIds.map(id => db.users.find(u => u.id === id)).filter(Boolean).map(safeUser);
+  const incoming = db.friendRequests.filter(r => r.status === 'pending' && r.toUserId === req.user.id).map(r => ({ ...r, user: safeUser(db.users.find(u => u.id === r.fromUserId) || {}) }));
+  const outgoing = db.friendRequests.filter(r => r.status === 'pending' && r.fromUserId === req.user.id).map(r => ({ ...r, user: safeUser(db.users.find(u => u.id === r.toUserId) || {}) }));
+  res.json({ friends, incoming, outgoing });
+});
+app.post('/api/friends/request/:id', auth, (req, res) => {
+  const targetId = req.params.id; if (targetId === req.user.id) return res.status(400).json({ error: 'Không thể kết bạn với chính mình' });
+  const db = load(); const target = db.users.find(u => u.id === targetId && !u.banned); if (!target) return res.status(404).json({ error: 'Không tìm thấy thành viên' });
+  const existing = db.friendRequests.find(r => (r.fromUserId === req.user.id && r.toUserId === targetId) || (r.fromUserId === targetId && r.toUserId === req.user.id));
+  if (existing?.status === 'accepted') return res.status(409).json({ error: 'Hai bạn đã là bạn bè' });
+  if (existing?.status === 'pending') {
+    if (existing.toUserId === req.user.id) { existing.status = 'accepted'; existing.acceptedAt = new Date().toISOString(); notifyUser(db, targetId, 'friend', 'Lời mời kết bạn đã được chấp nhận', `${req.user.displayName} đã chấp nhận lời mời kết bạn.`, { route: 'friends' }); save(db); return res.json({ request: existing, accepted: true }); }
+    return res.status(409).json({ error: 'Lời mời đã được gửi' });
+  }
+  const request = { id: crypto.randomUUID(), fromUserId: req.user.id, toUserId: targetId, status: 'pending', createdAt: new Date().toISOString() };
+  db.friendRequests.push(request); notifyUser(db, targetId, 'friend', 'Bạn có lời mời kết bạn', `${req.user.displayName} muốn kết bạn với bạn.`, { route: 'friends' }); save(db); res.json({ request });
+});
+app.post('/api/friends/request/:id/accept', auth, (req, res) => {
+  const db = load(); const request = db.friendRequests.find(r => r.id === req.params.id && r.toUserId === req.user.id && r.status === 'pending');
+  if (!request) return res.status(404).json({ error: 'Không tìm thấy lời mời' });
+  request.status = 'accepted'; request.acceptedAt = new Date().toISOString();
+  notifyUser(db, request.fromUserId, 'friend', 'Lời mời kết bạn đã được chấp nhận', `${req.user.displayName} đã chấp nhận lời mời kết bạn.`, { route: 'friends' }); save(db); res.json({ ok: true });
+});
+app.delete('/api/friends/request/:id', auth, (req, res) => {
+  const db = load(); const i = db.friendRequests.findIndex(r => r.id === req.params.id && r.status === 'pending' && (r.fromUserId === req.user.id || r.toUserId === req.user.id));
+  if (i < 0) return res.status(404).json({ error: 'Không tìm thấy lời mời' }); db.friendRequests.splice(i, 1); save(db); res.json({ ok: true });
+});
+app.delete('/api/friends/:id', auth, (req, res) => {
+  const db = load(); const before = db.friendRequests.length;
+  db.friendRequests = db.friendRequests.filter(r => !(r.status === 'accepted' && ((r.fromUserId === req.user.id && r.toUserId === req.params.id) || (r.fromUserId === req.params.id && r.toUserId === req.user.id))));
+  if (db.friendRequests.length === before) return res.status(404).json({ error: 'Không tìm thấy bạn bè' }); save(db); res.json({ ok: true });
+});
+app.get('/api/dm/:userId', auth, (req, res) => {
+  const db = load(); if (!areFriends(db, req.user.id, req.params.userId)) return res.status(403).json({ error: 'Chỉ có thể nhắn tin cho bạn bè' });
+  const messages = db.directMessages.filter(m => (m.userId === req.user.id && m.toUserId === req.params.userId) || (m.userId === req.params.userId && m.toUserId === req.user.id)).slice(-200);
+  for (const m of messages) { m.readBy = Array.isArray(m.readBy) ? m.readBy : []; if (m.toUserId === req.user.id && !m.readBy.includes(req.user.id)) m.readBy.push(req.user.id); }
+  save(db); res.json({ messages: messages.map(m => ({ ...m, mine: m.userId === req.user.id })) });
+});
+app.post('/api/dm/:userId', auth, chatLimiter, (req, res) => {
+  if (!ensureCanCommunicate(req.user, res)) return;
+  const db = load(); if (!areFriends(db, req.user.id, req.params.userId)) return res.status(403).json({ error: 'Chỉ có thể nhắn tin cho bạn bè' });
+  const target = db.users.find(u => u.id === req.params.userId && !u.banned); if (!target) return res.status(404).json({ error: 'Không tìm thấy thành viên' });
+  const text = cleanText(req.body.text, 500), clientId = cleanText(req.body.clientId, 100); if (!text) return res.status(400).json({ error: 'Tin nhắn trống' });
+  if (clientId) { const old = db.directMessages.find(m => m.userId === req.user.id && m.clientId === clientId); if (old) return res.json({ message: old, deduplicated: true }); }
+  const message = { id: crypto.randomUUID(), clientId, userId: req.user.id, toUserId: target.id, username: req.user.username, displayName: req.user.displayName, role: req.user.role, avatar: req.user.avatar || '', text, readBy: [req.user.id], createdAt: new Date().toISOString() };
+  db.directMessages.push(message); if (db.directMessages.length > 3000) db.directMessages = db.directMessages.slice(-3000);
+  notifyUser(db, target.id, 'dm', 'Tin nhắn mới', `${req.user.displayName}: ${text.slice(0, 140)}`, { route: 'friends', dmUserId: req.user.id }); save(db); res.json({ message });
+});
+
+// ===== Reports & Moderation v1.5 =====
+app.post('/api/reports', auth, (req, res) => {
+  const targetType = cleanText(req.body.targetType, 30), targetId = cleanText(req.body.targetId, 100), reason = cleanText(req.body.reason, 400);
+  if (!['user','chat','team','dm'].includes(targetType) || !targetId || reason.length < 3) return res.status(400).json({ error: 'Báo cáo chưa hợp lệ' });
+  const db = load(); const report = { id: crypto.randomUUID(), reporterId: req.user.id, reporterUsername: req.user.username, targetType, targetId, reason, status: 'open', createdAt: new Date().toISOString() };
+  db.reports.push(report); if (db.reports.length > 1000) db.reports = db.reports.slice(-1000); addLog(db, 'report_create', { by: req.user.username, targetType, targetId }); save(db); res.json({ report });
+});
+app.get('/api/admin/reports', auth, admin, (req, res) => res.json({ reports: load().reports.slice(-300).reverse() }));
+app.post('/api/admin/reports/:id/resolve', auth, admin, (req, res) => {
+  const db = load(); const report = db.reports.find(r => r.id === req.params.id); if (!report) return res.status(404).json({ error: 'Không tìm thấy báo cáo' });
+  report.status = cleanText(req.body.status, 20) === 'dismissed' ? 'dismissed' : 'resolved'; report.resolvedAt = new Date().toISOString(); report.resolvedBy = req.user.username; addLog(db, 'report_resolve', { by: req.user.username, report: report.id, status: report.status }); save(db); res.json({ report });
+});
+app.post('/api/admin/user/:id/mute', auth, admin, (req, res) => {
+  const db = load(); const target = db.users.find(u => u.id === req.params.id); if (!target) return res.status(404).json({ error: 'Không tìm thấy thành viên' });
+  if (req.user.role !== 'Boss' && target.role === 'Boss') return res.status(403).json({ error: 'Kì Cựu không thể hạn chế Boss' });
+  const minutes = Math.max(0, Math.min(10080, Number(req.body.minutes) || 0)); const reason = cleanText(req.body.reason, 200);
+  target.muteUntil = minutes ? new Date(Date.now() + minutes * 60000).toISOString() : null; target.muteReason = minutes ? reason : '';
+  notifyUser(db, target.id, 'moderation', minutes ? 'Tài khoản bị tạm hạn chế' : 'Đã gỡ hạn chế', minutes ? `Bạn bị hạn chế chat/tìm đội trong ${minutes} phút${reason ? ` • ${reason}` : ''}` : 'Quản trị viên đã gỡ hạn chế giao tiếp.', { route: 'profile' });
+  addLog(db, minutes ? 'user_mute' : 'user_unmute', { by: req.user.username, target: target.username, minutes, reason }); save(db); res.json({ user: safeUser(target) });
+});
+
+// ===== Notifications v1.5 =====
 app.get('/api/notifications', auth, (req, res) => {
   const db = load();
   const items = db.notifications.filter(n => n.userId === req.user.id).slice(-100).reverse();
@@ -420,7 +610,7 @@ app.post('/api/notifications/read', auth, (req, res) => {
   save(db); res.json({ ok: true });
 });
 
-// ===== Team Finder v1.4 =====
+// ===== Team Finder v1.5 =====
 app.get('/api/team-posts', auth, (req, res) => {
   const db = load();
   const now = Date.now();
@@ -429,6 +619,7 @@ app.get('/api/team-posts', auth, (req, res) => {
   res.json({ posts: db.teamPosts.slice(-200).reverse().map(p => ({ ...p, mine: p.userId === req.user.id })) });
 });
 app.post('/api/team-posts', auth, (req, res) => {
+  if (!ensureCanCommunicate(req.user, res)) return;
   const db = load();
   const clientId = cleanText(req.body.clientId, 100);
   if (clientId) { const existing = db.teamPosts.find(p => p.userId === req.user.id && p.clientId === clientId); if (existing) return res.json({ post: existing, deduplicated: true }); }
@@ -450,7 +641,7 @@ app.delete('/api/team-posts/:id', auth, (req, res) => {
   db.teamPosts.splice(i,1); save(db); res.json({ ok:true });
 });
 
-// ===== Session & Security Center v1.4 =====
+// ===== Session & Security Center v1.5 =====
 app.get('/api/security/sessions', auth, (req, res) => {
   const all = persistentSessionStore.readAll();
   const sessions = Object.entries(all).filter(([,sess]) => sess?.uid === req.user.id).map(([sid,sess]) => ({ id: sessionToken(sid), current: sid === req.sessionID, userAgent: sess.meta?.userAgent || 'Thiết bị không xác định', ip: sess.meta?.ip || '', createdAt: sess.meta?.createdAt || null, lastSeen: sess.meta?.lastSeen || null, expires: sess.cookie?.expires || null }));
@@ -535,7 +726,10 @@ app.post('/api/tools/pdf/compress', auth, toolLimiter, memoryUpload.single('pdf'
   } catch { res.status(400).json({ error: 'PDF bị khóa hoặc không thể tối ưu' }); }
 });
 
+const autoBackupHours = Math.max(1, Math.min(168, Number(process.env.AUTO_BACKUP_HOURS || 6)));
+setInterval(() => { try { const file = createBackupFile(); console.log(`[Backup] Tự động: ${file}`); } catch (e) { console.error('[Backup] Tự động lỗi:', e.message); } }, autoBackupHours * 60 * 60 * 1000).unref?.();
+
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`GiaToc Name Hub v1.4.0 running on port ${PORT}`);
+  console.log(`GiaToc Name Hub v1.5.0 running on port ${PORT}`);
   console.log(`[Storage] ${storageRoot}`);
 });

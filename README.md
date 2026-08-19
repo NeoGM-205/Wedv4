@@ -1,4 +1,4 @@
-# GiaTộc ┊Name Hub v1.4.0 — Web + PWA + Railway 24/7 + Bubblewrap
+# GiaTộc ┊Name Hub v1.5.0 — Web + PWA + Railway 24/7 + Bubblewrap
 
 Đây vẫn là **website**. PWA/Bubblewrap chỉ là lớp để cài website lên Android khi cần, không chuyển source thành ứng dụng desktop.
 
@@ -139,3 +139,32 @@ Bản này bổ sung Service Worker App Shell, IndexedDB snapshot + hàng đợi
 - Chat nâng cao: phòng theo game, reply, @mention, reaction.
 - Bảo mật: đổi mật khẩu, xem phiên đăng nhập và đăng xuất thiết bị khác.
 - Vẫn giữ Railway Volume `/app/storage` và toàn bộ công cụ v1.3.0.
+
+
+## v1.5.0 — Social, Push & Reliability
+
+- Push Notification Web/PWA với VAPID key lưu bền vững trong Railway Volume.
+- Bạn bè: gửi/chấp nhận/từ chối/hủy kết bạn.
+- DM 1-1 giữa bạn bè; DM gửi khi offline được xếp hàng chờ đồng bộ.
+- Báo cáo thành viên, chat, bài tìm đồng đội và DM.
+- Boss/Kì Cựu có Trung tâm báo cáo và Timeout/Mute theo phút.
+- Backup tự động theo `AUTO_BACKUP_HOURS`, giữ số bản theo `BACKUP_KEEP`, có danh sách/Restore/Delete. Restore yêu cầu nhập lại mật khẩu.
+- Offline Queue Center: xem pending/error/conflict, retry, hủy và xử lý xung đột hồ sơ.
+- Xung đột hồ sơ dùng `profileUpdatedAt`; có lựa chọn giữ bản thiết bị hoặc bản máy chủ.
+
+### Railway Variables gợi ý
+
+```env
+NODE_ENV=production
+SESSION_SECRET=chuoi-bi-mat-rat-dai-va-co-dinh
+PUBLIC_ORIGIN=https://domain-cua-ban
+VAPID_SUBJECT=https://domain-cua-ban
+AUTO_BACKUP_HOURS=6
+BACKUP_KEEP=30
+```
+
+Volume vẫn mount tại:
+
+```text
+/app/storage
+```

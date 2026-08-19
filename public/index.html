@@ -11,7 +11,7 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
   <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="/style.css?v=1.4.0">
+  <link rel="stylesheet" href="/style.css?v=1.5.0">
 </head>
 <body>
 <div class="bg"></div>
@@ -44,6 +44,8 @@
       <button data-route="chat">💬 Trò chuyện</button>
       <button data-route="team">🤝 Tìm đồng đội</button>
       <button data-route="notifications">🔔 Thông báo <span id="notificationBadge" class="nav-badge" hidden>0</span></button>
+      <button data-route="friends">👥 Bạn bè & DM</button>
+      <button data-route="sync-center">🔄 Đồng bộ</button>
       <button data-route="avatar-tool">👑 Avatar Role</button>
       <button data-route="qr">🔳 Mã QR</button>
       <button data-route="pdf">📄 Công cụ PDF</button>
@@ -69,7 +71,7 @@
         <section class="card feature-overview">
           <div class="section-title"><h2>🧰 Tiện ích cộng đồng</h2><span class="status-pill">Web + PWA</span></div>
           <div class="quick-grid">
-            <button data-go="chat">💬 Trò chuyện</button><button data-go="team">🤝 Tìm đồng đội</button><button data-go="notifications">🔔 Thông báo</button><button data-go="avatar-tool">👑 Avatar Role</button><button data-go="qr">🔳 Tạo QR</button>
+            <button data-go="chat">💬 Trò chuyện</button><button data-go="team">🤝 Tìm đồng đội</button><button data-go="notifications">🔔 Thông báo</button><button data-go="friends">👥 Bạn bè & DM</button><button data-go="sync-center">🔄 Đồng bộ</button><button data-go="avatar-tool">👑 Avatar Role</button><button data-go="qr">🔳 Tạo QR</button>
             <button data-go="pdf">📄 PDF</button><button data-go="tournament">🏅 Bảng đấu</button><button data-go="banner">🖼️ Banner</button><button data-go="image-tool">✂️ Ảnh</button>
           </div>
         </section>
@@ -124,7 +126,34 @@
     </section>
 
     <section class="page-section" data-section="notifications" hidden>
-      <section class="card"><div class="section-title"><h2>🔔 Trung tâm thông báo</h2><button class="ghost tiny" data-action="read-all-notifications">✓ Đánh dấu đã đọc</button></div><div id="notificationList" class="notification-list"></div></section>
+      <div class="two-col">
+        <section class="card"><div class="section-title"><h2>🔔 Trung tâm thông báo</h2><button class="ghost tiny" data-action="read-all-notifications">✓ Đánh dấu đã đọc</button></div><div id="notificationList" class="notification-list"></div></section>
+        <section class="card"><div class="section-title"><h2>📲 Push Notification</h2><span id="pushStatus" class="status-pill">Đang kiểm tra...</span></div><p class="muted">Nhận thông báo khi có @mention, trả lời, lời mời kết bạn, DM, thành tích hoặc thay đổi Role.</p><div class="row"><button data-action="enable-push">🔔 Bật thông báo đẩy</button><button class="ghost" data-action="disable-push">Tắt trên thiết bị này</button></div><p class="muted">Quyền thông báo chỉ được hỏi sau khi bạn bấm nút Bật.</p></section>
+      </div>
+    </section>
+
+    <section class="page-section" data-section="friends" hidden>
+      <div class="two-col friends-layout">
+        <section class="card">
+          <div class="section-title"><h2>👥 Bạn bè</h2><button class="ghost tiny" data-action="load-friends">Làm mới</button></div>
+          <h3>Lời mời đang chờ</h3><div id="incomingFriendRequests" class="friend-list"></div>
+          <h3>Danh sách bạn bè</h3><div id="friendList" class="friend-list"></div>
+          <h3>Tìm thành viên</h3><input id="friendSearch" placeholder="Tên hiển thị hoặc @username" data-input-action="render-friend-directory"><div id="friendDirectory" class="friend-list"></div>
+        </section>
+        <section class="card dm-card">
+          <div class="section-title"><h2 id="dmHeader">💬 Tin nhắn riêng</h2><span id="dmState" class="status-pill">Chọn một người bạn</span></div>
+          <div id="dmMessages" class="chat-messages dm-messages"><p class="muted">Chọn bạn bè bên trái để bắt đầu trò chuyện.</p></div>
+          <div class="chat-compose"><input id="dmInput" maxlength="500" placeholder="Nhắn tin cho bạn bè..." data-enter-action="send-dm"><button data-action="send-dm">Gửi</button></div>
+        </section>
+      </div>
+    </section>
+
+    <section class="page-section" data-section="sync-center" hidden>
+      <section class="card">
+        <div class="section-title"><h2>🔄 Offline Queue Center</h2><div class="row compact-actions"><button class="ghost tiny" data-action="refresh-sync-center">Làm mới</button><button class="tiny" data-action="sync-offline">Đồng bộ ngay</button></div></div>
+        <p class="muted">Xem từng thao tác đang chờ, lỗi đồng bộ và xung đột hồ sơ. Với xung đột, bạn có thể giữ bản trên thiết bị hoặc giữ bản máy chủ.</p>
+        <div id="syncQueueList" class="sync-queue-list"></div>
+      </section>
     </section>
 
     <section class="page-section" data-section="avatar-tool" hidden>
@@ -205,16 +234,17 @@
       <section class="card">
         <div class="section-title"><h2>🛡️ Trung tâm quản trị</h2><span class="status-pill">Quản lý website</span></div>
         <input id="adminSearch" placeholder="Tìm tên hiển thị hoặc tài khoản..." data-input-action="render-admin-users">
-        <div class="admin-toolbar"><button data-action="backup">💾 Tạo backup dữ liệu</button><button class="ghost" data-action="load-logs">📋 Nhật ký quản trị</button></div>
+        <div class="admin-toolbar"><button data-action="backup">💾 Tạo backup dữ liệu</button><button class="ghost" data-action="load-backups">🗂️ Backup & Restore</button><button class="ghost" data-action="load-admin-reports">🚩 Báo cáo</button><button class="ghost" data-action="load-logs">📋 Nhật ký quản trị</button></div>
         <div id="users"></div><div id="logs" class="logs" hidden></div>
+        <div class="admin-subgrid"><section class="admin-subcard"><div class="section-title"><h3>🚩 Trung tâm báo cáo</h3><span class="status-pill">Moderation</span></div><div id="adminReports" class="report-list"></div></section><section class="admin-subcard"><div class="section-title"><h3>🗂️ Backup & Restore</h3><span id="backupPolicy" class="status-pill">Railway Volume</span></div><div id="backupList" class="backup-list"></div></section></div>
       </section>
     </section>
   </section>
 </main>
-<script src="/vendor/qrcode.bundle.js?v=1.4.0"></script>
-<script src="/vendor/pdf-lib.min.js?v=1.4.0"></script>
-<script src="/offline-db.js?v=1.4.0"></script>
-<script src="/app.js?v=1.4.0"></script>
-<script src="/pwa.js?v=1.4.0"></script>
+<script src="/vendor/qrcode.bundle.js?v=1.5.0"></script>
+<script src="/vendor/pdf-lib.min.js?v=1.5.0"></script>
+<script src="/offline-db.js?v=1.5.0"></script>
+<script src="/app.js?v=1.5.0"></script>
+<script src="/pwa.js?v=1.5.0"></script>
 </body>
 </html>
