@@ -2,5 +2,7 @@
   "users": [],
   "music": [],
   "logs": [],
-  "chat": []
+  "chat": [],
+  "notifications": [],
+  "teamPosts": []
 }

@@ -2,7 +2,7 @@
   "id": "/",
   "name": "GiaTộc ┊Name Hub",
   "short_name": "GiaTộc Name",
-  "description": "GiaTộc ┊Name Hub: hồ sơ, thành tích, trò chuyện và bộ công cụ cộng đồng game.",
+  "description": "GiaTộc ┊Name Hub v1.4: hồ sơ, thông báo, chat nâng cao, tìm đồng đội, công cụ cộng đồng và offline.",
   "lang": "vi",
   "dir": "ltr",
   "start_url": "/#overview",
@@ -84,6 +84,28 @@
       "name": "Công cụ PDF",
       "short_name": "PDF",
       "url": "/#pdf",
+      "icons": [
+        {
+          "src": "/icons/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    },
+    {
+      "name": "Tìm đồng đội",
+      "short_name": "Tìm đội",
+      "url": "/#team",
+      "icons": [
+        {
+          "src": "/icons/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    },
+    {
+      "name": "Thông báo",
+      "short_name": "Thông báo",
+      "url": "/#notifications",
       "icons": [
         {
           "src": "/icons/icon-192.png",

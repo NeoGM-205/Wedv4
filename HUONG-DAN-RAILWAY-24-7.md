@@ -1,4 +1,4 @@
-# GiaTộc ┊Name Hub v1.2.2 — Railway 24/7
+# GiaTộc ┊Name Hub v1.3.0 — Railway 24/7
 
 ## 1. Không xóa Volume hiện tại
 Giữ nguyên Volume `wedandroid-volume` đang gắn với service `WedAndroid`.
@@ -16,9 +16,9 @@ Trong Railway:
 
 Sau đó Apply/Deploy thay đổi.
 
-> Nếu trước đó Volume mount ở `/app/data` và đã có `db.json`, bản v1.2.2 sẽ tự nhận file `db.json` ở root Volume và copy sang `/app/storage/data/db.json` trong lần chạy đầu tiên. Không cần xóa dữ liệu cũ.
+> Nếu trước đó Volume mount ở `/app/data` và đã có `db.json`, bản v1.3.0 sẽ tự nhận file `db.json` ở root Volume và copy sang `/app/storage/data/db.json` trong lần chạy đầu tiên. Không cần xóa dữ liệu cũ.
 
-## 3. Đưa source v1.2.2 lên GitHub
+## 3. Đưa source v1.3.0 lên GitHub
 Thay source cũ bằng source trong ZIP này rồi commit/push.
 
 Không commit:
@@ -46,7 +46,7 @@ Deploy service `WedAndroid`.
 Log thành công sẽ có dạng:
 
 ```text
-GiaToc Name Hub v1.2.2 running on port ...
+GiaToc Name Hub v1.3.0 running on port ...
 [Storage] /app/storage
 ```
 
@@ -62,7 +62,7 @@ Cần thấy:
 ```json
 {
   "ok": true,
-  "version": "1.2.2",
+  "version": "1.3.0",
   "storage": {
     "root": "/app/storage"
   }

@@ -1,7 +1,13 @@
 node_modules/
 .env
+
 storage/
-*.log
-.DS_Store
-android-twa/
+backups/
+public/uploads/
+
 *.keystore
+android.keystore
+android-twa/
+
+npm-debug.log*
+.DS_Store

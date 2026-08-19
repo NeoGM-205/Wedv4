@@ -1,4 +1,4 @@
-# GiaTộc ┊Name Hub v1.2.2 — Web + PWA + Railway 24/7 + Bubblewrap
+# GiaTộc ┊Name Hub v1.4.0 — Web + PWA + Railway 24/7 + Bubblewrap
 
 Đây vẫn là **website**. PWA/Bubblewrap chỉ là lớp để cài website lên Android khi cần, không chuyển source thành ứng dụng desktop.
 
@@ -88,7 +88,7 @@ Sau đó mở `http://localhost:3000`.
 Nếu đã từng cài PWA/bản web cũ, đóng tab cũ rồi mở lại. Nếu vẫn thấy giao diện cũ, xóa dữ liệu trang/cache của domain một lần để bỏ Service Worker cũ.
 
 
-## v1.2.2 — Railway 24/7 + Persistent Storage
+## v1.3.0 — Railway 24/7 + Persistent Storage
 
 Bản này gom toàn bộ dữ liệu phát sinh vào **một thư mục duy nhất** `storage/`:
 
@@ -115,7 +115,7 @@ storage/
 https://TEN-DOMAIN-CUA-BAN/api/health
 ```
 
-Nếu thấy `version: 1.2.2` và `storage.root` là `/app/storage` thì đúng.
+Nếu thấy `version: 1.3.0` và `storage.root` là `/app/storage` thì đúng.
 
 ### Tự migrate dữ liệu cũ
 - Nếu Volume cũ từng mount `/app/data`, file `db.json` ở root Volume sẽ được copy sang `storage/data/db.json` khi bản mới chạy lần đầu.
@@ -125,3 +125,17 @@ Nếu thấy `version: 1.2.2` và `storage.root` là `/app/storage` thì đúng.
 - Không đưa thư mục `storage/` chứa dữ liệu thật lên GitHub.
 - Trên Railway nên đặt biến `SESSION_SECRET` cố định và đủ dài.
 - `PORT` do Railway cấp tự động; server đã lắng nghe trên `0.0.0.0`.
+
+
+## Offline nâng cao v1.3.0
+
+Bản này bổ sung Service Worker App Shell, IndexedDB snapshot + hàng đợi đồng bộ, Background Sync, QR/PDF chạy phía trình duyệt và trạng thái Online/Offline. Xem `HUONG-DAN-OFFLINE-PWA.md`.
+
+
+## v1.4.0 — Community Advanced
+- Đồng bộ Offline thông minh: trạng thái pending/error, số lần thử và retry khi có mạng.
+- Trung tâm thông báo: thành tích, đổi Role, mention và reply trong chat.
+- Tìm đồng đội: game, chế độ, server, giờ chơi, số người, tự hết hạn; tạo bài offline rồi đồng bộ.
+- Chat nâng cao: phòng theo game, reply, @mention, reaction.
+- Bảo mật: đổi mật khẩu, xem phiên đăng nhập và đăng xuất thiết bị khác.
+- Vẫn giữ Railway Volume `/app/storage` và toàn bộ công cụ v1.3.0.

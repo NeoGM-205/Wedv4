@@ -140,8 +140,8 @@ function migrateDirectoryOnce(sourceDir, targetDir) {
 }
 migrateDirectoryOnce(path.join(__dirname, 'public', 'uploads'), uploadDir);
 migrateDirectoryOnce(path.join(__dirname, 'backups'), backupDir);
-const defaultDb = { users: [], music: [], logs: [], chat: [] };
-const normalizeDb = db => ({ ...defaultDb, ...(db || {}), users: db?.users || [], music: db?.music || [], logs: db?.logs || [], chat: db?.chat || [] });
+const defaultDb = { users: [], music: [], logs: [], chat: [], notifications: [], teamPosts: [] };
+const normalizeDb = db => ({ ...defaultDb, ...(db || {}), users: db?.users || [], music: db?.music || [], logs: db?.logs || [], chat: db?.chat || [], notifications: db?.notifications || [], teamPosts: db?.teamPosts || [] });
 const load = () => { try { return normalizeDb(JSON.parse(fs.readFileSync(dbPath, 'utf8'))); } catch { return structuredClone(defaultDb); } };
 const save = db => fs.writeFileSync(dbPath, JSON.stringify(normalizeDb(db), null, 2));
 if (!fs.existsSync(dbPath)) save(defaultDb);
@@ -160,7 +160,7 @@ app.use(session({
 }));
 app.use('/uploads', express.static(uploadDir));
 app.use((req, res, next) => {
-  if (['/', '/index.html', '/app.js', '/pwa.js', '/sw.js', '/manifest.webmanifest'].includes(req.path)) {
+  if (['/', '/index.html', '/app.js', '/pwa.js', '/offline-db.js', '/sw.js', '/manifest.webmanifest'].includes(req.path)) {
     res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
   }
   next();
@@ -206,6 +206,7 @@ function auth(req, res, next) {
   if (!u) return res.status(401).json({ error: 'Chưa đăng nhập' });
   if (u.banned) return res.status(403).json({ error: 'Tài khoản đã bị cấm' });
   req.user = u;
+  req.session.meta = { ...(req.session.meta || {}), ...requestMeta(req), createdAt: req.session.meta?.createdAt || new Date().toISOString() };
   next();
 }
 function admin(req, res, next) {
@@ -213,10 +214,17 @@ function admin(req, res, next) {
   next();
 }
 function addLog(db, action, extra = {}) { db.logs.push({ at: new Date().toISOString(), action, ...extra }); }
+function notifyUser(db, userId, type, title, message, extra = {}) {
+  if (!userId) return;
+  db.notifications.push({ id: crypto.randomUUID(), userId, type, title: cleanText(title, 100), message: cleanText(message, 240), read: false, createdAt: new Date().toISOString(), ...extra });
+  if (db.notifications.length > 2000) db.notifications = db.notifications.slice(-2000);
+}
+function sessionToken(sid) { return crypto.createHash('sha256').update(sid).digest('hex').slice(0, 20); }
+function requestMeta(req) { return { userAgent: cleanText(req.get('user-agent') || 'Thiết bị không xác định', 180), ip: cleanText(req.ip || '', 80), lastSeen: new Date().toISOString() }; }
 
 app.get('/api/health', (req, res) => res.json({
   ok: true,
-  version: '1.2.2',
+  version: '1.4.0',
   storage: { root: storageRoot, data: dataDir, uploads: uploadDir, backups: backupDir }
 }));
 
@@ -236,6 +244,7 @@ app.post('/api/register', async (req, res) => {
   addLog(db, 'register', { user: u.username });
   save(db);
   req.session.uid = u.id;
+  req.session.meta = { ...requestMeta(req), createdAt: new Date().toISOString() };
   res.json({ user: safeUser(u) });
 });
 
@@ -249,6 +258,7 @@ app.post('/api/login', loginLimiter, async (req, res) => {
   u.lastSeen = new Date().toISOString();
   save(db);
   req.session.uid = u.id;
+  req.session.meta = { ...requestMeta(req), createdAt: new Date().toISOString() };
   res.json({ user: safeUser(u) });
 });
 app.post('/api/logout', (req, res) => req.session.destroy(() => res.json({ ok: true })));
@@ -299,18 +309,46 @@ app.post('/api/music', auth, (req, res) => {
 
 app.get('/api/chat', auth, (req, res) => {
   const db = load();
-  const messages = db.chat.slice(-150).map(m => ({ ...m, mine: m.userId === req.user.id }));
-  res.json({ messages });
+  const room = cleanText(req.query.room || 'general', 40) || 'general';
+  const messages = db.chat.filter(m => (m.room || 'general') === room).slice(-150).map(m => ({ ...m, mine: m.userId === req.user.id }));
+  res.json({ room, messages });
 });
 app.post('/api/chat', auth, chatLimiter, (req, res) => {
   const text = cleanText(req.body.text, 500);
+  const clientId = cleanText(req.body.clientId, 100);
+  const room = cleanText(req.body.room || 'general', 40) || 'general';
+  const replyTo = cleanText(req.body.replyTo, 80);
   if (!text) return res.status(400).json({ error: 'Tin nhắn trống' });
   const db = load();
-  const message = { id: crypto.randomUUID(), userId: req.user.id, username: req.user.username, displayName: req.user.displayName, role: req.user.role, avatar: req.user.avatar || '', text, createdAt: new Date().toISOString() };
+  if (clientId) {
+    const existing = db.chat.find(m => m.userId === req.user.id && m.clientId === clientId);
+    if (existing) return res.json({ message: existing, deduplicated: true });
+  }
+  const replied = replyTo ? db.chat.find(m => m.id === replyTo && (m.room || 'general') === room) : null;
+  const message = { id: crypto.randomUUID(), clientId: clientId || '', userId: req.user.id, username: req.user.username, displayName: req.user.displayName, role: req.user.role, avatar: req.user.avatar || '', room, text, replyTo: replied ? replied.id : '', replyPreview: replied ? { displayName: replied.displayName, text: replied.text.slice(0, 100) } : null, reactions: {}, createdAt: new Date().toISOString() };
   db.chat.push(message);
-  if (db.chat.length > 500) db.chat = db.chat.slice(-500);
+  if (db.chat.length > 800) db.chat = db.chat.slice(-800);
+  const mentioned = [...new Set((text.match(/@[a-zA-Z0-9_.-]{3,30}/g) || []).map(x => x.slice(1).toLowerCase()))];
+  for (const username of mentioned) {
+    const target = db.users.find(u => u.username.toLowerCase() === username && u.id !== req.user.id);
+    if (target) notifyUser(db, target.id, 'mention', 'Bạn được nhắc trong trò chuyện', `${req.user.displayName}: ${text.slice(0, 140)}`, { route: 'chat', room });
+  }
+  if (replied && replied.userId !== req.user.id) notifyUser(db, replied.userId, 'reply', 'Có người trả lời tin nhắn của bạn', `${req.user.displayName}: ${text.slice(0, 140)}`, { route: 'chat', room });
   save(db);
   res.json({ message });
+});
+app.post('/api/chat/:id/reaction', auth, (req, res) => {
+  const emoji = cleanText(req.body.emoji, 8);
+  if (!['👍','❤️','😂','🔥','🎮'].includes(emoji)) return res.status(400).json({ error: 'Reaction không hợp lệ' });
+  const db = load();
+  const message = db.chat.find(m => m.id === req.params.id);
+  if (!message) return res.status(404).json({ error: 'Không tìm thấy tin nhắn' });
+  message.reactions = message.reactions || {};
+  const list = new Set(message.reactions[emoji] || []);
+  if (list.has(req.user.id)) list.delete(req.user.id); else list.add(req.user.id);
+  message.reactions[emoji] = [...list];
+  save(db);
+  res.json({ reactions: message.reactions });
 });
 app.delete('/api/chat/:id', auth, (req, res) => {
   const db = load();
@@ -330,8 +368,8 @@ app.post('/api/admin/user/:id', auth, admin, (req, res) => {
   const db = load();
   const u = db.users.find(x => x.id === req.params.id);
   if (!u) return res.status(404).json({ error: 'Không tìm thấy' });
-  if (typeof req.body.banned === 'boolean') u.banned = req.body.banned;
-  if (['Boss', 'Kì Cựu', 'Member'].includes(req.body.role) && req.user.role === 'Boss') u.role = req.body.role;
+  if (typeof req.body.banned === 'boolean') { u.banned = req.body.banned; if (!u.banned) notifyUser(db, u.id, 'account', 'Tài khoản đã được mở cấm', `Quản trị viên ${req.user.displayName} đã mở cấm tài khoản của bạn.`); }
+  if (['Boss', 'Kì Cựu', 'Member'].includes(req.body.role) && req.user.role === 'Boss' && u.role !== req.body.role) { const oldRole = u.role; u.role = req.body.role; notifyUser(db, u.id, 'role', 'Role của bạn đã thay đổi', `${oldRole} → ${u.role}`, { route: 'profile' }); }
   addLog(db, 'admin_update', { target: u.username, by: req.user.username });
   save(db);
   res.json({ user: safeUser(u) });
@@ -346,6 +384,7 @@ app.post('/api/admin/user/:id/achievement', auth, admin, (req, res) => {
   if (!title) return res.status(400).json({ error: 'Chưa nhập tên thành tích' });
   u.achievements = Array.isArray(u.achievements) ? u.achievements : [];
   u.achievements.push({ id: crypto.randomUUID(), title, description, icon, awardedAt: new Date().toISOString(), awardedBy: req.user.username });
+  notifyUser(db, u.id, 'achievement', 'Bạn có thành tích mới', `${icon} ${title}`, { route: 'profile' });
   addLog(db, 'achievement_add', { target: u.username, by: req.user.username });
   save(db);
   res.json({ user: safeUser(u) });
@@ -365,6 +404,73 @@ app.post('/api/backup', auth, admin, (req, res) => {
   const f = path.join(backupDir, `db-${stamp}.json`);
   fs.copyFileSync(dbPath, f);
   res.json({ ok: true, file: path.basename(f) });
+});
+
+
+// ===== Notifications v1.4 =====
+app.get('/api/notifications', auth, (req, res) => {
+  const db = load();
+  const items = db.notifications.filter(n => n.userId === req.user.id).slice(-100).reverse();
+  res.json({ notifications: items, unread: items.filter(n => !n.read).length });
+});
+app.post('/api/notifications/read', auth, (req, res) => {
+  const db = load();
+  const id = cleanText(req.body.id, 80);
+  for (const n of db.notifications) if (n.userId === req.user.id && (!id || n.id === id)) n.read = true;
+  save(db); res.json({ ok: true });
+});
+
+// ===== Team Finder v1.4 =====
+app.get('/api/team-posts', auth, (req, res) => {
+  const db = load();
+  const now = Date.now();
+  for (const p of db.teamPosts) if (p.status === 'open' && p.expiresAt && new Date(p.expiresAt).getTime() <= now) p.status = 'expired';
+  save(db);
+  res.json({ posts: db.teamPosts.slice(-200).reverse().map(p => ({ ...p, mine: p.userId === req.user.id })) });
+});
+app.post('/api/team-posts', auth, (req, res) => {
+  const db = load();
+  const clientId = cleanText(req.body.clientId, 100);
+  if (clientId) { const existing = db.teamPosts.find(p => p.userId === req.user.id && p.clientId === clientId); if (existing) return res.json({ post: existing, deduplicated: true }); }
+  const game = cleanText(req.body.game, 60), mode = cleanText(req.body.mode, 80), server = cleanText(req.body.server, 80), playTime = cleanText(req.body.playTime, 80), note = cleanText(req.body.note, 280);
+  const slots = Math.max(1, Math.min(20, Number(req.body.slots) || 1));
+  const hours = Math.max(1, Math.min(168, Number(req.body.expireHours) || 24));
+  if (!game) return res.status(400).json({ error: 'Chưa chọn game' });
+  const post = { id: crypto.randomUUID(), clientId, userId: req.user.id, username: req.user.username, displayName: req.user.displayName, role: req.user.role, avatar: req.user.avatar || '', game, mode, server, playTime, slots, note, status: 'open', createdAt: new Date().toISOString(), expiresAt: new Date(Date.now()+hours*3600000).toISOString() };
+  db.teamPosts.push(post); if (db.teamPosts.length > 500) db.teamPosts = db.teamPosts.slice(-500); save(db); res.json({ post });
+});
+app.post('/api/team-posts/:id/close', auth, (req, res) => {
+  const db = load(); const p = db.teamPosts.find(x => x.id === req.params.id); if (!p) return res.status(404).json({ error: 'Không tìm thấy bài' });
+  if (p.userId !== req.user.id && !['Boss','Kì Cựu'].includes(req.user.role)) return res.status(403).json({ error: 'Không đủ quyền' });
+  p.status = p.status === 'open' ? 'closed' : 'open'; save(db); res.json({ post: p });
+});
+app.delete('/api/team-posts/:id', auth, (req, res) => {
+  const db = load(); const i = db.teamPosts.findIndex(x => x.id === req.params.id); if (i<0) return res.status(404).json({ error: 'Không tìm thấy bài' });
+  const p=db.teamPosts[i]; if (p.userId !== req.user.id && !['Boss','Kì Cựu'].includes(req.user.role)) return res.status(403).json({ error: 'Không đủ quyền' });
+  db.teamPosts.splice(i,1); save(db); res.json({ ok:true });
+});
+
+// ===== Session & Security Center v1.4 =====
+app.get('/api/security/sessions', auth, (req, res) => {
+  const all = persistentSessionStore.readAll();
+  const sessions = Object.entries(all).filter(([,sess]) => sess?.uid === req.user.id).map(([sid,sess]) => ({ id: sessionToken(sid), current: sid === req.sessionID, userAgent: sess.meta?.userAgent || 'Thiết bị không xác định', ip: sess.meta?.ip || '', createdAt: sess.meta?.createdAt || null, lastSeen: sess.meta?.lastSeen || null, expires: sess.cookie?.expires || null }));
+  res.json({ sessions });
+});
+app.post('/api/security/sessions/:token/revoke', auth, (req, res) => {
+  const all = persistentSessionStore.readAll();
+  const entry = Object.entries(all).find(([sid,sess]) => sess?.uid === req.user.id && sessionToken(sid) === req.params.token);
+  if (!entry) return res.status(404).json({ error: 'Không tìm thấy phiên' });
+  if (entry[0] === req.sessionID) return res.status(400).json({ error: 'Dùng nút Đăng xuất để thoát phiên hiện tại' });
+  persistentSessionStore.destroy(entry[0], err => err ? res.status(500).json({ error: 'Không thể đăng xuất thiết bị' }) : res.json({ ok:true }));
+});
+app.post('/api/security/password', auth, loginLimiter, async (req, res) => {
+  const currentPassword = String(req.body.currentPassword || ''), newPassword = String(req.body.newPassword || '');
+  if (newPassword.length < 8) return res.status(400).json({ error: 'Mật khẩu mới cần ít nhất 8 ký tự' });
+  const db=load(); const u=db.users.find(x=>x.id===req.user.id); if (!u || !await bcrypt.compare(currentPassword,u.passwordHash)) return res.status(401).json({ error:'Mật khẩu hiện tại không đúng' });
+  u.passwordHash=await bcrypt.hash(newPassword,12); addLog(db,'password_change',{user:u.username}); save(db);
+  // revoke other sessions
+  const all=persistentSessionStore.readAll(); for (const [sid,sess] of Object.entries(all)) if (sess?.uid===u.id && sid!==req.sessionID) delete all[sid]; persistentSessionStore.writeAll(all);
+  res.json({ ok:true });
 });
 
 app.get('/api/tools/qr', auth, toolLimiter, async (req, res) => {
@@ -430,6 +536,6 @@ app.post('/api/tools/pdf/compress', auth, toolLimiter, memoryUpload.single('pdf'
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`GiaToc Name Hub v1.2.2 running on port ${PORT}`);
+  console.log(`GiaToc Name Hub v1.4.0 running on port ${PORT}`);
   console.log(`[Storage] ${storageRoot}`);
 });
