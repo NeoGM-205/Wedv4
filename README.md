@@ -1,6 +1,16 @@
-# GiaTộc ┊Name Hub v1.7.0 — Web + PWA + Railway 24/7 + Bubblewrap
+# GiaTộc ┊Name Hub v1.8.0 — Web + PWA + Railway 24/7 + Bubblewrap
 
 Đây vẫn là **website**. PWA/Bubblewrap chỉ là lớp để cài website lên Android khi cần, không chuyển source thành ứng dụng desktop.
+
+
+## Nâng cấp v1.8.0 — Professional System
+- Permission Matrix: Boss cấu hình quyền chi tiết cho Kì Cựu/Member.
+- Audit Log có phân loại, tìm kiếm và lịch sử thao tác quản trị.
+- Account Center: tổng quan tài khoản, phiên đăng nhập, 2FA, quyền và xuất dữ liệu cá nhân.
+- Notification Preferences + Quiet Hours.
+- Moderation Workflow: Open → In Review → Resolved/Dismissed, có người phụ trách và ghi chú nội bộ.
+- System Status: Backend, Database, Storage, Push, Backup, uptime và phiên bản.
+- Version & Cache Manager: kiểm tra Service Worker, cập nhật ngay và xóa cache ứng dụng.
 
 ## Chạy local
 1. Cài Node.js 20+.

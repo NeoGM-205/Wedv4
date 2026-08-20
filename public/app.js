@@ -193,7 +193,7 @@ async function logout() {
 }
 
 function routeTo(route) {
-  const allowed = ['overview','profile','chat','team','match','events','profile-card','showcase','highlights','toolbox','notifications','friends','sync-center','avatar-tool','qr','pdf','tournament','banner','image-tool','music','security','admin'];
+  const allowed = ['overview','profile','chat','team','match','events','profile-card','showcase','highlights','toolbox','notifications','friends','sync-center','avatar-tool','qr','pdf','tournament','banner','image-tool','music','security','status','admin'];
   if (!allowed.includes(route)) route = 'overview';
   if (route === 'admin' && !['Boss','Kì Cựu'].includes(me?.role)) route = 'overview';
   $$('.page-section').forEach(s => s.hidden = s.dataset.section !== route);
@@ -207,13 +207,14 @@ function routeTo(route) {
   if (route === 'showcase') renderProfileShowcase();
   if (route === 'highlights') loadHighlights();
   if (route === 'toolbox') renderToolboxOptions();
-  if (route === 'notifications') { loadNotifications(); refreshPushStatus(); }
+  if (route === 'notifications') { loadNotifications(); refreshPushStatus(); loadNotificationPreferences(); }
   if (route === 'friends') loadFriends();
   if (route === 'sync-center') renderSyncCenter();
-  if (route === 'security') { loadSessions(); loadTwoFactorStatus(); }
+  if (route === 'security') { loadSessions(); loadTwoFactorStatus(); loadAccountCenter(); }
+  if (route === 'status') { loadSystemStatus(); refreshCacheManager(); }
   if (route === 'avatar-tool') drawRoleAvatar();
   if (route === 'banner') drawBanner();
-  if (route === 'admin' && isOnline()) { loadAdminReports(); loadBackups(); loadAnalytics(); loadAchievementTemplates(); }
+  if (route === 'admin' && isOnline()) { loadAdminReports(); loadBackups(); loadAnalytics(); loadAchievementTemplates(); loadPermissions(); loadAudit(); }
   if (route === 'admin' && !isOnline()) $('#users').innerHTML = '<p class="offline-note">🟠 Quản trị tài khoản cần mạng. Các công cụ khác vẫn dùng offline được.</p>';
 }
 let routesReady = false;
@@ -241,7 +242,10 @@ function runUiAction(action, el) {
     'find-team-match': findTeamMatch, 'create-event': createEvent, 'draw-profile-card': drawProfileCard, 'search-chat': loadChat,
     'setup-2fa': setupTwoFactor, 'confirm-2fa': confirmTwoFactor, 'disable-2fa': disableTwoFactor, 'load-analytics': loadAnalytics,
     'load-pulse': loadCommunityPulse, 'add-highlight': addHighlight, 'load-highlights': loadHighlights, 'save-toolbox': saveToolbox, 'prestige': prestige,
-    'load-achievement-templates': loadAchievementTemplates, 'create-achievement-template': createAchievementTemplate
+    'load-achievement-templates': loadAchievementTemplates, 'create-achievement-template': createAchievementTemplate,
+    'save-notification-prefs': saveNotificationPreferences, 'load-account-center': loadAccountCenter, 'export-account-data': exportAccountData,
+    'load-system-status': loadSystemStatus, 'check-app-update': checkAppUpdate, 'update-app-now': updateAppNow, 'clear-app-cache': clearAppCache,
+    'load-permissions': loadPermissions, 'save-permissions': savePermissions, 'load-audit': loadAudit
   };
   if (action === 'download-canvas') return downloadCanvas(el.dataset.canvas, el.dataset.filename || 'download.png');
   if (action === 'rotate-image') return rotateImage(Number(el.dataset.deg) || 0);
@@ -273,6 +277,7 @@ function runUiAction(action, el) {
   if (action === 'resolve-server') return resolveConflictServer(Number(el.dataset.id));
   if (action === 'mute-user') return muteUser(el.dataset.id);
   if (action === 'resolve-report') return resolveReport(el.dataset.id, el.dataset.status || 'resolved');
+  if (action === 'workflow-report') return workflowReport(el.dataset.id, el.dataset.status || 'in_review');
   if (action === 'restore-backup') return restoreBackup(el.dataset.file);
   if (action === 'delete-backup') return deleteBackup(el.dataset.file);
   if (action === 'delete-highlight') return deleteHighlight(el.dataset.id);
@@ -536,8 +541,20 @@ async function setRole(id, role) { if (!requireOnline('Đổi Role')) return; aw
 async function ban(id, banned) { if (!requireOnline('Cấm/Mở cấm')) return; if (id === me.id && !confirm('Bạn đang thao tác trên chính tài khoản của mình. Tiếp tục?')) return; await api('/api/admin/user/' + id, { method: 'POST', body: JSON.stringify({ banned }) }); await Promise.all([adminUsers(), members()]); }
 async function backup() { if (!requireOnline('Backup')) return; const j = await api('/api/backup', { method: 'POST' }); alert('Đã backup: ' + j.file); await loadBackups(); }
 async function muteUser(id){if(!requireOnline('Timeout'))return;const u=adminCache.find(x=>x.id===id);const active=u?.muteUntil&&new Date(u.muteUntil).getTime()>Date.now();if(active){if(!confirm(`Gỡ Timeout cho ${u.displayName}?`))return;await api(`/api/admin/user/${id}/mute`,{method:'POST',body:JSON.stringify({minutes:0})});await adminUsers();return;}const raw=prompt('Timeout bao nhiêu phút? (tối đa 10080 = 7 ngày)','30');if(raw==null)return;const minutes=Number(raw);if(!Number.isFinite(minutes)||minutes<=0)return alert('Số phút không hợp lệ.');const reason=prompt('Lý do Timeout:','Spam / vi phạm nội quy')||'';try{await api(`/api/admin/user/${id}/mute`,{method:'POST',body:JSON.stringify({minutes,reason})});await adminUsers();}catch(e){alert(e.message)}}
-async function loadAdminReports(){if(!me||!['Boss','Kì Cựu'].includes(me.role)||!isOnline())return;try{const j=await api('/api/admin/reports');$('#adminReports').innerHTML=(j.reports||[]).map(r=>`<article class="report-row ${r.status}"><div><b>🚩 ${esc(r.targetType)} • ${esc(r.status)}</b><p>${esc(r.reason)}</p><small>@${esc(r.reporterUsername||'')} • ${fmtDate(r.createdAt)}${r.resolvedBy?` • xử lý bởi ${esc(r.resolvedBy)}`:''}</small></div>${r.status==='open'?`<div class="report-actions"><button class="tiny" data-action="resolve-report" data-id="${r.id}" data-status="resolved">Đã xử lý</button><button class="tiny ghost" data-action="resolve-report" data-id="${r.id}" data-status="dismissed">Bỏ qua</button></div>`:''}</article>`).join('')||'<p class="muted">Không có báo cáo.</p>';}catch(e){$('#adminReports').innerHTML=`<p class="offline-note">${esc(e.message)}</p>`;}}
+async function loadAdminReports(){
+  if(!me||!['Boss','Kì Cựu'].includes(me.role)||!isOnline())return;
+  try{
+    const j=await api('/api/admin/reports');
+    $('#adminReports').innerHTML=(j.reports||[]).map(r=>`<article class="report-row ${esc(r.status)}"><div><b>🚩 ${esc(r.targetType)} • ${esc(r.status)}</b><p>${esc(r.reason)}</p><small>@${esc(r.reporterUsername||'')} • ${fmtDate(r.createdAt)}${r.assignedTo?` • phụ trách: ${esc(r.assignedTo)}`:''}</small>${r.internalNote?`<p class="internal-note">📝 ${esc(r.internalNote)}</p>`:''}</div><div class="report-actions"><button class="tiny ghost" data-action="workflow-report" data-id="${r.id}" data-status="in_review">Đang xem</button><button class="tiny" data-action="workflow-report" data-id="${r.id}" data-status="resolved">Đã xử lý</button><button class="tiny ghost" data-action="workflow-report" data-id="${r.id}" data-status="dismissed">Bỏ qua</button></div></article>`).join('')||'<p class="muted">Không có báo cáo.</p>';
+  }catch(e){$('#adminReports').innerHTML=`<p class="offline-note">${esc(e.message)}</p>`;}
+}
 async function resolveReport(id,status){if(!requireOnline('Xử lý báo cáo'))return;try{await api(`/api/admin/reports/${id}/resolve`,{method:'POST',body:JSON.stringify({status})});await loadAdminReports();}catch(e){alert(e.message)}}
+async function workflowReport(id,status){
+  if(!requireOnline('Cập nhật quy trình báo cáo'))return;
+  const assignedTo=prompt('Người phụ trách báo cáo:',me?.username||'') ?? '';
+  const internalNote=prompt('Ghi chú nội bộ cho quản trị viên:','') ?? '';
+  try{await api(`/api/admin/reports/${id}/workflow`,{method:'POST',body:JSON.stringify({status,assignedTo,internalNote})});await loadAdminReports();await loadAudit();}catch(e){alert(e.message)}
+}
 async function loadBackups(){if(!me||!['Boss','Kì Cựu'].includes(me.role)||!isOnline())return;try{const j=await api('/api/backups');$('#backupPolicy').textContent=`Mỗi ${j.autoHours}h • giữ ${j.keep} bản`;$('#backupList').innerHTML=(j.backups||[]).map(b=>`<article class="backup-row"><div><b>${esc(b.file)}</b><p>${(b.size/1024).toFixed(1)} KB</p><small>${fmtDate(b.createdAt)}</small></div><div class="backup-actions"><button class="tiny" data-action="restore-backup" data-file="${esc(b.file)}">Khôi phục</button><button class="tiny danger" data-action="delete-backup" data-file="${esc(b.file)}">Xóa</button></div></article>`).join('')||'<p class="muted">Chưa có backup.</p>';}catch(e){$('#backupList').innerHTML=`<p class="offline-note">${esc(e.message)}</p>`;}}
 async function restoreBackup(file){if(!requireOnline('Khôi phục backup'))return;if(!confirm(`Khôi phục ${file}? Hệ thống sẽ tự tạo một backup an toàn trước khi restore.`))return;const password=prompt('Nhập mật khẩu hiện tại để xác nhận Restore:','');if(!password)return;try{const j=await api(`/api/backups/${encodeURIComponent(file)}/restore`,{method:'POST',body:JSON.stringify({password})});alert(`Đã khôi phục ${j.restored}. Backup an toàn: ${j.safetyBackup}. Trang sẽ tải lại.`);location.reload();}catch(e){alert(e.message)}}
 async function deleteBackup(file){if(!requireOnline('Xóa backup'))return;if(!confirm(`Xóa ${file}?`))return;try{await api(`/api/backups/${encodeURIComponent(file)}`,{method:'DELETE'});await loadBackups();}catch(e){alert(e.message)}}
@@ -649,6 +666,61 @@ async function loadAchievementTemplates(){if(!me||!['Boss','Kì Cựu'].includes
 async function createAchievementTemplate(){if(!requireOnline('Tạo mẫu thành tích'))return;try{await api('/api/admin/achievement-templates',{method:'POST',body:JSON.stringify({icon:$('#achTemplateIcon').value,title:$('#achTemplateTitle').value,rarity:$('#achTemplateRarity').value,xp:Number($('#achTemplateXp').value)||0,description:$('#achTemplateDescription').value})});$('#achTemplateTitle').value=$('#achTemplateDescription').value='';await loadAchievementTemplates();}catch(e){alert(e.message)}}
 async function deleteAchievementTemplate(id){if(!requireOnline('Xóa mẫu thành tích'))return;if(!confirm('Xóa mẫu này?'))return;try{await api('/api/admin/achievement-templates/'+id,{method:'DELETE'});await loadAchievementTemplates();}catch(e){alert(e.message)}}
 async function awardAchievementTemplate(id){if(!requireOnline('Trao thành tích'))return;const q=prompt('Nhập username của thành viên nhận thành tích:','');if(!q)return;const target=adminCache.find(u=>u.username.toLowerCase()===q.trim().toLowerCase()||u.displayName.toLowerCase()===q.trim().toLowerCase());if(!target)return alert('Không tìm thấy thành viên trong danh sách quản trị.');try{await api(`/api/admin/achievement-templates/${id}/award/${target.id}`,{method:'POST',body:'{}'});alert('Đã trao thành tích.');await adminUsers();}catch(e){alert(e.message)}}
+
+
+// ===== v1.8 Professional System =====
+const PERMISSION_LABELS={manageMembers:'Quản lý thành viên / Timeout / Ban',manageAchievements:'Thành tích & Achievement Composer',manageReports:'Moderation Workflow',manageBackups:'Backup & Restore',viewAnalytics:'Xem Analytics',manageEvents:'Quản lý sự kiện',viewAudit:'Xem Audit Log',managePermissions:'Quản lý Permission Matrix'};
+let permissionState=null;
+async function loadPermissions(){
+  const box=$('#permissionMatrix'); if(!box||!me||!['Boss','Kì Cựu'].includes(me.role)||!isOnline())return;
+  try{
+    const j=await api('/api/admin/permissions'); permissionState=j.matrix;
+    const roles=['Kì Cựu','Member'];
+    box.innerHTML=`<div class="permission-head"><b>Quyền</b>${roles.map(r=>`<b>${esc(r)}</b>`).join('')}</div>${j.keys.map(key=>`<div class="permission-row"><span>${esc(PERMISSION_LABELS[key]||key)}</span>${roles.map(role=>`<label><input type="checkbox" data-permission-role="${esc(role)}" data-permission-key="${esc(key)}" ${j.matrix?.[role]?.[key]?'checked':''} ${me.role!=='Boss'?'disabled':''}> ${j.matrix?.[role]?.[key]?'Bật':'Tắt'}</label>`).join('')}</div>`).join('')}`;
+    if($('#savePermissionBtn'))$('#savePermissionBtn').hidden=me.role!=='Boss';
+  }catch(e){box.innerHTML=`<p class="offline-note">${esc(e.message)}</p>`;}
+}
+async function savePermissions(){
+  if(me?.role!=='Boss')return alert('Chỉ Boss được thay đổi Permission Matrix.');
+  const matrix={}; $$('[data-permission-role]').forEach(el=>{const r=el.dataset.permissionRole,k=el.dataset.permissionKey;matrix[r]=matrix[r]||{};matrix[r][k]=!!el.checked;});
+  try{const j=await api('/api/admin/permissions',{method:'POST',body:JSON.stringify({matrix})});permissionState=j.matrix;alert('Đã lưu Permission Matrix.');await loadPermissions();await loadAudit();}catch(e){alert(e.message)}
+}
+
+async function loadAudit(){
+  const box=$('#auditLog'); if(!box||!me||!['Boss','Kì Cựu'].includes(me.role)||!isOnline())return;
+  try{
+    const q=$('#auditSearch')?.value||'',category=$('#auditCategory')?.value||''; const j=await api(`/api/admin/audit?q=${encodeURIComponent(q)}&category=${encodeURIComponent(category)}&limit=200`);
+    box.innerHTML=(j.logs||[]).map(l=>`<article class="audit-item"><div><span class="audit-category">${esc(l.category||'system')}</span><b>${esc(l.action)}</b><p>${esc(l.by||l.user||'Hệ thống')}${l.target?` → ${esc(l.target)}`:''}</p></div><small>${fmtDate(l.at)}</small></article>`).join('')||'<p class="muted">Không có dữ liệu Audit phù hợp.</p>';
+  }catch(e){box.innerHTML=`<p class="offline-note">${esc(e.message)}</p>`;}
+}
+
+async function loadNotificationPreferences(){
+  if(!me||!isOnline())return;
+  try{const j=await api('/api/notification-preferences'),p=j.preferences||{}; const map={prefPushEnabled:'pushEnabled',prefDm:'dm',prefMentions:'mentions',prefFriends:'friends',prefAchievements:'achievements',prefModeration:'moderation',prefEvents:'events',prefSystem:'system',prefQuietEnabled:'quietEnabled'};for(const [id,key] of Object.entries(map))if($('#'+id))$('#'+id).checked=!!p[key];if($('#prefQuietStart'))$('#prefQuietStart').value=p.quietStart||'22:00';if($('#prefQuietEnd'))$('#prefQuietEnd').value=p.quietEnd||'07:00';}catch(e){console.warn('notification prefs',e.message)}
+}
+async function saveNotificationPreferences(){
+  if(!requireOnline('Lưu tùy chọn thông báo'))return;
+  const payload={pushEnabled:!!$('#prefPushEnabled')?.checked,dm:!!$('#prefDm')?.checked,mentions:!!$('#prefMentions')?.checked,friends:!!$('#prefFriends')?.checked,achievements:!!$('#prefAchievements')?.checked,moderation:!!$('#prefModeration')?.checked,events:!!$('#prefEvents')?.checked,system:!!$('#prefSystem')?.checked,quietEnabled:!!$('#prefQuietEnabled')?.checked,quietStart:$('#prefQuietStart')?.value||'22:00',quietEnd:$('#prefQuietEnd')?.value||'07:00',timezoneOffsetMinutes:-new Date().getTimezoneOffset()};
+  try{const j=await api('/api/notification-preferences',{method:'POST',body:JSON.stringify(payload)});if(me)me.notificationPrefs=j.preferences;alert('Đã lưu tùy chọn thông báo.');}catch(e){alert(e.message)}
+}
+
+async function loadAccountCenter(){
+  const box=$('#accountSummary'); if(!box||!me)return;
+  if(!isOnline()){box.innerHTML='<p class="offline-note">Account Center cần mạng để kiểm tra trạng thái bảo mật mới nhất.</p>';return;}
+  try{const j=await api('/api/account/summary');const u=j.user,s=j.security||{},perms=Object.entries(j.permissions||{}).filter(([,v])=>v).length;box.innerHTML=`<div class="account-stat"><b>${esc(u.displayName)}</b><span>@${esc(u.username)} • ${esc(u.role)}</span></div><div class="account-stat"><b>${s.twoFactorEnabled?'🟢 2FA bật':'🟠 2FA tắt'}</b><span>${s.recoveryCodesRemaining||0} Recovery Codes còn lại</span></div><div class="account-stat"><b>${s.sessions||0} thiết bị</b><span>Phiên đăng nhập hiện có</span></div><div class="account-stat"><b>${perms} quyền</b><span>Permission Matrix hiện tại</span></div>`;}catch(e){box.innerHTML=`<p class="offline-note">${esc(e.message)}</p>`;}
+}
+function exportAccountData(){if(!requireOnline('Xuất dữ liệu cá nhân'))return;window.location.href='/api/account/export';}
+
+function formatBytes(bytes){const n=Number(bytes)||0;if(n<1024)return `${n} B`;if(n<1048576)return `${(n/1024).toFixed(1)} KB`;if(n<1073741824)return `${(n/1048576).toFixed(1)} MB`;return `${(n/1073741824).toFixed(2)} GB`;}
+async function loadSystemStatus(){
+  const box=$('#systemStatusGrid'); if(!box||!me)return;
+  if(!isOnline()){box.innerHTML='<div class="status-tile warn"><b>🟠 Offline</b><span>Không thể kiểm tra backend lúc này.</span></div>';refreshCacheManager();return;}
+  try{const j=await api('/api/system/status');box.innerHTML=`<div class="status-tile ok"><b>🟢 Backend</b><span>v${esc(j.app?.version||'?')} • uptime ${Math.floor((j.app?.uptimeSeconds||0)/60)} phút</span></div><div class="status-tile ${j.database?.ok?'ok':'bad'}"><b>${j.database?.ok?'🟢':'🔴'} Database</b><span>${j.database?.users||0} users • ${j.database?.logs||0} logs</span></div><div class="status-tile ${j.storage?.ok?'ok':'bad'}"><b>${j.storage?.ok?'🟢':'🔴'} Storage</b><span>${formatBytes(j.storage?.bytes)} • ${esc(j.storage?.root||'')}</span></div><div class="status-tile ${j.push?.ok?'ok':'bad'}"><b>${j.push?.ok?'🟢':'🔴'} Push</b><span>${j.push?.subscriptions||0} subscriptions</span></div><div class="status-tile ok"><b>💾 Backup</b><span>${j.backup?.count||0} bản • ${j.backup?.lastAt?fmtDate(j.backup.lastAt):'chưa có'}</span></div>`;$('#statusUpdatedAt').textContent=`Cập nhật: ${fmtDate(j.app?.serverTime||new Date().toISOString())}`;if($('#appVersionBadge'))$('#appVersionBadge').textContent=`v${j.app?.version||'1.8.0'}`;}catch(e){box.innerHTML=`<p class="offline-note">${esc(e.message)}</p>`;}
+}
+async function refreshCacheManager(){const box=$('#cacheManagerInfo');if(!box)return;try{const info=await window.getAppCacheInfo?.()||{};box.innerHTML=`<div><b>Service Worker</b><span>${info.controlled?'🟢 Đang kiểm soát':'🟠 Chưa kiểm soát'}</span></div><div><b>Phiên bản client</b><span>${esc(info.version||'1.8.0')}</span></div><div><b>Update chờ</b><span>${info.waiting?'Có bản mới sẵn sàng':'Không'}</span></div><div><b>Cache</b><span>${(info.cacheKeys||[]).map(esc).join(', ')||'Chưa có'}</span></div>`;}catch(e){box.innerHTML=`<p class="muted">${esc(e.message)}</p>`;}}
+async function checkAppUpdate(){try{const j=await window.checkForAppUpdate?.();await refreshCacheManager();alert(j?.waiting?'Có bản cập nhật mới. Bấm “Cập nhật ngay”.':'Bạn đang dùng bản mới nhất đã phát hiện.');}catch(e){alert(e.message||'Không kiểm tra được cập nhật.')}}
+async function updateAppNow(){try{await window.forceAppUpdate?.();}catch(e){alert(e.message||'Không thể cập nhật.')}}
+async function clearAppCache(){if(!confirm('Xóa cache ứng dụng và tải lại? Offline Queue không bị xóa.'))return;try{await window.clearAppCaches?.();location.reload();}catch(e){alert(e.message||'Không thể xóa cache.')}}
 
 setInterval(() => { if ($('#clock')) $('#clock').textContent = new Date().toLocaleString('vi-VN'); }, 1000);
 setInterval(() => { if (me && isOnline()) fetch('/api/ping', { method: 'POST', credentials: 'same-origin' }).then(() => members()).catch(()=>{}); }, 60000);

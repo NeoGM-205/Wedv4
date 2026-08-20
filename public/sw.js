@@ -1,4 +1,4 @@
-const VERSION = '1.7.0';
+const VERSION = '1.8.0';
 const APP_CACHE = `giatoc-app-${VERSION}`;
 const RUNTIME_CACHE = `giatoc-runtime-${VERSION}`;
 const DB_NAME = 'giatoc-name-hub-offline';
@@ -9,10 +9,10 @@ const CORE_ASSETS = [
   '/index.html',
   '/offline.html',
   '/manifest.webmanifest',
-  '/style.css?v=1.7.0',
-  '/offline-db.js?v=1.7.0',
-  '/app.js?v=1.7.0',
-  '/pwa.js?v=1.7.0',
+  '/style.css?v=1.8.0',
+  '/offline-db.js?v=1.8.0',
+  '/app.js?v=1.8.0',
+  '/pwa.js?v=1.8.0',
   '/assets/avatar-boss.svg',
   '/assets/avatar-elder.svg',
   '/assets/avatar-member.svg',
@@ -21,7 +21,7 @@ const CORE_ASSETS = [
   '/icons/maskable-192.png',
   '/icons/maskable-512.png'
 ];
-const OPTIONAL_ASSETS = ['/vendor/qrcode.bundle.js?v=1.7.0', '/vendor/pdf-lib.min.js?v=1.7.0'];
+const OPTIONAL_ASSETS = ['/vendor/qrcode.bundle.js?v=1.8.0', '/vendor/pdf-lib.min.js?v=1.8.0'];
 
 async function cacheAppShell() {
   const cache = await caches.open(APP_CACHE);
@@ -225,4 +225,5 @@ self.addEventListener('message', event => {
   if (event.data?.type === 'SKIP_WAITING') self.skipWaiting();
   if (event.data?.type === 'SYNC_NOW') event.waitUntil(syncQueue());
   if (event.data?.type === 'CLEAR_RUNTIME_CACHE') event.waitUntil(caches.delete(RUNTIME_CACHE));
+  if (event.data?.type === 'CLEAR_ALL_CACHES') event.waitUntil((async()=>{for(const k of await caches.keys())await caches.delete(k);await cacheAppShell();})());
 });

@@ -2,7 +2,7 @@
   "id": "/",
   "name": "GiaTộc ┊Name Hub",
   "short_name": "GiaTộc Name",
-  "description": "GiaTộc ┊Name Hub v1.7: Smart Match Score, Dynamic Role Aura, Highlight Vault, Auto Profile Showcase, Achievement Composer, Live Community Pulse, Smart Availability, Personal Toolbox và Prestige.",
+  "description": "GiaTộc ┊Name Hub v1.8: Permission Matrix, Audit Log, Account Center, Notification Preferences, Moderation Workflow, System Status và Version/Cache Manager.",
   "lang": "vi",
   "dir": "ltr",
   "start_url": "/#overview",
@@ -190,5 +190,6 @@
         }
       ]
     }
-  ]
+  ],
+  "version": "1.8.0"
 }

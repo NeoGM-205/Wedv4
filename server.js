@@ -15,6 +15,8 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 3000;
+const APP_VERSION = '1.8.0';
+const APP_NAME = 'GiaTộc ┊Name Hub';
 
 // Tất cả dữ liệu phát sinh được gom vào một thư mục duy nhất.
 // Trên Railway hãy mount Volume vào /app/storage.
@@ -163,12 +165,17 @@ function migrateDirectoryOnce(sourceDir, targetDir) {
 }
 migrateDirectoryOnce(path.join(__dirname, 'public', 'uploads'), uploadDir);
 migrateDirectoryOnce(path.join(__dirname, 'backups'), backupDir);
-const defaultDb = { users: [], music: [], logs: [], chat: [], notifications: [], teamPosts: [], friendRequests: [], directMessages: [], reports: [], pushSubscriptions: [], events: [], achievementTemplates: [] };
+const DEFAULT_PERMISSION_MATRIX = {
+  'Boss': { manageMembers:true, manageAchievements:true, manageReports:true, manageBackups:true, viewAnalytics:true, manageEvents:true, viewAudit:true, managePermissions:true },
+  'Kì Cựu': { manageMembers:true, manageAchievements:true, manageReports:true, manageBackups:false, viewAnalytics:true, manageEvents:true, viewAudit:true, managePermissions:false },
+  'Member': { manageMembers:false, manageAchievements:false, manageReports:false, manageBackups:false, viewAnalytics:false, manageEvents:false, viewAudit:false, managePermissions:false }
+};
+const defaultDb = { users: [], music: [], logs: [], chat: [], notifications: [], teamPosts: [], friendRequests: [], directMessages: [], reports: [], pushSubscriptions: [], events: [], achievementTemplates: [], permissionMatrix: structuredClone(DEFAULT_PERMISSION_MATRIX) };
 const normalizeDb = db => ({
   ...defaultDb, ...(db || {}),
   users: db?.users || [], music: db?.music || [], logs: db?.logs || [], chat: db?.chat || [],
   notifications: db?.notifications || [], teamPosts: db?.teamPosts || [], friendRequests: db?.friendRequests || [],
-  directMessages: db?.directMessages || [], reports: db?.reports || [], pushSubscriptions: db?.pushSubscriptions || [], events: db?.events || [], achievementTemplates: db?.achievementTemplates || []
+  directMessages: db?.directMessages || [], reports: db?.reports || [], pushSubscriptions: db?.pushSubscriptions || [], events: db?.events || [], achievementTemplates: db?.achievementTemplates || [], permissionMatrix: { ...structuredClone(DEFAULT_PERMISSION_MATRIX), ...(db?.permissionMatrix || {}) }
 });
 const load = () => { try { return normalizeDb(JSON.parse(fs.readFileSync(dbPath, 'utf8'))); } catch { return structuredClone(defaultDb); } };
 const save = db => fs.writeFileSync(dbPath, JSON.stringify(normalizeDb(db), null, 2));
@@ -240,8 +247,40 @@ function safeUser(u) {
     playStyle: u.playStyle || 'flex',
     prestige: Number(u.prestige || 0),
     toolbox: Array.isArray(u.toolbox) ? u.toolbox : ['chat','team','qr','avatar-tool'],
-    highlights: Array.isArray(u.highlights) ? u.highlights.slice(-24) : []
+    highlights: Array.isArray(u.highlights) ? u.highlights.slice(-24) : [],
+    notificationPrefs: normalizeNotificationPrefs(u.notificationPrefs)
   };
+}
+
+
+const DEFAULT_NOTIFICATION_PREFS = {
+  pushEnabled:true, dm:true, mentions:true, friends:true, achievements:true, moderation:true, events:true, system:true,
+  quietEnabled:false, quietStart:'22:00', quietEnd:'07:00', timezoneOffsetMinutes:420
+};
+function normalizeNotificationPrefs(value={}) {
+  const v={...DEFAULT_NOTIFICATION_PREFS,...(value||{})};
+  v.quietStart=/^([01]\d|2[0-3]):[0-5]\d$/.test(v.quietStart)?v.quietStart:'22:00';
+  v.quietEnd=/^([01]\d|2[0-3]):[0-5]\d$/.test(v.quietEnd)?v.quietEnd:'07:00';
+  v.timezoneOffsetMinutes=Math.max(-720,Math.min(840,Number(v.timezoneOffsetMinutes)||0));
+  for (const k of ['pushEnabled','dm','mentions','friends','achievements','moderation','events','system','quietEnabled']) v[k]=!!v[k];
+  return v;
+}
+function notificationCategory(type='system') {
+  if (['dm','reply'].includes(type)) return 'dm';
+  if (['mention'].includes(type)) return 'mentions';
+  if (['friend'].includes(type)) return 'friends';
+  if (['achievement','prestige','role'].includes(type)) return 'achievements';
+  if (['moderation','account'].includes(type)) return 'moderation';
+  if (['event'].includes(type)) return 'events';
+  return 'system';
+}
+function isQuietNow(prefs) {
+  if (!prefs.quietEnabled) return false;
+  const localMs=Date.now()+prefs.timezoneOffsetMinutes*60000;
+  const d=new Date(localMs), cur=d.getUTCHours()*60+d.getUTCMinutes();
+  const [sh,sm]=prefs.quietStart.split(':').map(Number), [eh,em]=prefs.quietEnd.split(':').map(Number);
+  const start=sh*60+sm,end=eh*60+em;
+  return start===end ? true : start<end ? cur>=start&&cur<end : cur>=start||cur<end;
 }
 
 function levelFromXp(xp) { return Math.max(1, Math.floor(Math.sqrt(Math.max(0, xp) / 100)) + 1); }
@@ -279,17 +318,35 @@ function auth(req, res, next) {
   req.session.meta = { ...(req.session.meta || {}), ...requestMeta(req), createdAt: req.session.meta?.createdAt || new Date().toISOString() };
   next();
 }
+function permissionMatrix(db) {
+  const raw=db?.permissionMatrix || {};
+  const out=structuredClone(DEFAULT_PERMISSION_MATRIX);
+  for (const role of Object.keys(out)) out[role]={...out[role],...(raw[role]||{})};
+  return out;
+}
+function hasPermission(user, db, key) {
+  if (user?.role === 'Boss') return true;
+  return !!permissionMatrix(db)[user?.role]?.[key];
+}
 function admin(req, res, next) {
   if (!['Boss', 'Kì Cựu'].includes(req.user.role)) return res.status(403).json({ error: 'Không đủ quyền' });
   next();
 }
-function addLog(db, action, extra = {}) { db.logs.push({ at: new Date().toISOString(), action, ...extra }); }
+function requirePermission(key) {
+  return (req,res,next)=>{ const db=load(); if(!hasPermission(req.user,db,key)) return res.status(403).json({error:`Bạn không có quyền: ${key}`}); req.permissions=permissionMatrix(db)[req.user.role]||{}; next(); };
+}
+function bossOnly(req,res,next){ if(req.user.role!=='Boss') return res.status(403).json({error:'Chỉ Boss được phép thực hiện thao tác này'}); next(); }
+function addLog(db, action, extra = {}) {
+  const category = extra.category || (action.startsWith('backup')?'backup':action.includes('report')||action.includes('mute')||action.includes('ban')?'moderation':action.includes('achievement')?'achievement':action.includes('event')?'event':action.includes('permission')?'security':action.includes('2fa')||action.includes('password')||action.includes('session')?'security':'system');
+  db.logs.push({ id: crypto.randomUUID(), at: new Date().toISOString(), action, category, ...extra });
+  if (db.logs.length > 5000) db.logs = db.logs.slice(-5000);
+}
 function notifyUser(db, userId, type, title, message, extra = {}) {
   if (!userId) return;
   const notification = { id: crypto.randomUUID(), userId, type, title: cleanText(title, 100), message: cleanText(message, 240), read: false, createdAt: new Date().toISOString(), ...extra };
   db.notifications.push(notification);
   if (db.notifications.length > 2000) db.notifications = db.notifications.slice(-2000);
-  setImmediate(() => sendPushToUser(userId, { title: notification.title, body: notification.message, route: notification.route || 'notifications', room: notification.room || '', dmUserId: notification.dmUserId || '' }).catch(()=>{}));
+  setImmediate(() => sendPushToUser(userId, { type, title: notification.title, body: notification.message, route: notification.route || 'notifications', room: notification.room || '', dmUserId: notification.dmUserId || '' }).catch(()=>{}));
 }
 function sessionToken(sid) { return crypto.createHash('sha256').update(sid).digest('hex').slice(0, 20); }
 function requestMeta(req) { return { userAgent: cleanText(req.get('user-agent') || 'Thiết bị không xác định', 180), ip: cleanText(req.ip || '', 80), lastSeen: new Date().toISOString() }; }
@@ -314,6 +371,10 @@ function createBackupFile() {
 }
 async function sendPushToUser(userId, payload = {}) {
   const db = load();
+  const user=db.users.find(u=>u.id===userId);
+  const prefs=normalizeNotificationPrefs(user?.notificationPrefs);
+  const category=notificationCategory(payload.type);
+  if (!prefs.pushEnabled || prefs[category] === false || isQuietNow(prefs)) return;
   const subs = db.pushSubscriptions.filter(s => s.userId === userId);
   if (!subs.length) return;
   const stale = new Set();
@@ -333,7 +394,7 @@ async function sendPushToUser(userId, payload = {}) {
 
 app.get('/api/health', (req, res) => res.json({
   ok: true,
-  version: '1.7.0',
+  version: APP_VERSION,
   storage: { root: storageRoot, data: dataDir, uploads: uploadDir, backups: backupDir }
 }));
 
@@ -349,7 +410,7 @@ app.post('/api/register', async (req, res) => {
     id: crypto.randomUUID(), username, displayName, passwordHash: await bcrypt.hash(password, 12), role: first ? 'Boss' : 'Member', avatar: '', banned: false,
     bio: '', games: '', gameId: '', discord: '', achievements: [], badges: [], xp: 0, xpMeta: {}, prestige: 0,
     auraStatus: 'online', availabilityDays: [], availabilityStart: '', availabilityEnd: '', playStyle: 'flex', toolbox: ['chat','team','qr','avatar-tool'], highlights: [],
-    twoFactorEnabled: false, twoFactorSecret: '', twoFactorPendingSecret: '', recoveryCodeHashes: [], muteUntil: null, muteReason: '', createdAt: new Date().toISOString(), profileUpdatedAt: new Date().toISOString(), lastSeen: new Date().toISOString()
+    twoFactorEnabled: false, twoFactorSecret: '', twoFactorPendingSecret: '', recoveryCodeHashes: [], notificationPrefs: structuredClone(DEFAULT_NOTIFICATION_PREFS), muteUntil: null, muteReason: '', createdAt: new Date().toISOString(), profileUpdatedAt: new Date().toISOString(), lastSeen: new Date().toISOString()
   };
   db.users.push(u);
   addLog(db, 'register', { user: u.username });
@@ -522,8 +583,8 @@ app.delete('/api/chat/:id', auth, (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/admin/users', auth, admin, (req, res) => res.json({ users: load().users.map(safeUser) }));
-app.post('/api/admin/user/:id', auth, admin, (req, res) => {
+app.get('/api/admin/users', auth, admin, requirePermission('manageMembers'), (req, res) => res.json({ users: load().users.map(safeUser) }));
+app.post('/api/admin/user/:id', auth, admin, requirePermission('manageMembers'), (req, res) => {
   const db = load();
   const u = db.users.find(x => x.id === req.params.id);
   if (!u) return res.status(404).json({ error: 'Không tìm thấy' });
@@ -533,7 +594,7 @@ app.post('/api/admin/user/:id', auth, admin, (req, res) => {
   save(db);
   res.json({ user: safeUser(u) });
 });
-app.post('/api/admin/user/:id/achievement', auth, admin, (req, res) => {
+app.post('/api/admin/user/:id/achievement', auth, admin, requirePermission('manageAchievements'), (req, res) => {
   const db = load();
   const u = db.users.find(x => x.id === req.params.id);
   if (!u) return res.status(404).json({ error: 'Không tìm thấy thành viên' });
@@ -548,7 +609,7 @@ app.post('/api/admin/user/:id/achievement', auth, admin, (req, res) => {
   save(db);
   res.json({ user: safeUser(u) });
 });
-app.delete('/api/admin/user/:id/achievement/:achievementId', auth, admin, (req, res) => {
+app.delete('/api/admin/user/:id/achievement/:achievementId', auth, admin, requirePermission('manageAchievements'), (req, res) => {
   const db = load();
   const u = db.users.find(x => x.id === req.params.id);
   if (!u) return res.status(404).json({ error: 'Không tìm thấy thành viên' });
@@ -557,20 +618,20 @@ app.delete('/api/admin/user/:id/achievement/:achievementId', auth, admin, (req, 
   save(db);
   res.json({ user: safeUser(u) });
 });
-app.get('/api/admin/logs', auth, admin, (req, res) => res.json({ logs: load().logs.slice(-100).reverse() }));
-app.post('/api/backup', auth, admin, (req, res) => {
+app.get('/api/admin/logs', auth, admin, requirePermission('viewAudit'), (req, res) => res.json({ logs: load().logs.slice(-100).reverse() }));
+app.post('/api/backup', auth, admin, requirePermission('manageBackups'), (req, res) => {
   const file = createBackupFile();
   const db = load(); addLog(db, 'backup_create', { by: req.user.username, file }); save(db);
   res.json({ ok: true, file });
 });
-app.get('/api/backups', auth, admin, (req, res) => {
+app.get('/api/backups', auth, admin, requirePermission('manageBackups'), (req, res) => {
   const backups = fs.readdirSync(backupDir).filter(f => /^db-.*\.json$/i.test(f)).map(file => {
     const st = fs.statSync(path.join(backupDir, file));
     return { file, size: st.size, createdAt: st.mtime.toISOString() };
   }).sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt));
   res.json({ backups, autoHours: Math.max(1, Number(process.env.AUTO_BACKUP_HOURS || 6)), keep: Math.max(5, Number(process.env.BACKUP_KEEP || 30)) });
 });
-app.post('/api/backups/:file/restore', auth, admin, loginLimiter, async (req, res) => {
+app.post('/api/backups/:file/restore', auth, admin, requirePermission('manageBackups'), loginLimiter, async (req, res) => {
   const file = backupNameSafe(req.params.file); if (!file) return res.status(400).json({ error: 'Tên backup không hợp lệ' });
   const db = load(); const actor = db.users.find(u => u.id === req.user.id);
   if (!actor || !await bcrypt.compare(String(req.body.password || ''), actor.passwordHash)) return res.status(401).json({ error: 'Mật khẩu xác nhận không đúng' });
@@ -583,7 +644,7 @@ app.post('/api/backups/:file/restore', auth, admin, loginLimiter, async (req, re
     res.json({ ok: true, restored: file, safetyBackup: safety });
   } catch { res.status(400).json({ error: 'Backup bị lỗi hoặc không đọc được' }); }
 });
-app.delete('/api/backups/:file', auth, admin, (req, res) => {
+app.delete('/api/backups/:file', auth, admin, requirePermission('manageBackups'), (req, res) => {
   const file = backupNameSafe(req.params.file); if (!file) return res.status(400).json({ error: 'Tên backup không hợp lệ' });
   const full = path.join(backupDir, file); if (!fs.existsSync(full)) return res.status(404).json({ error: 'Không tìm thấy backup' });
   fs.unlinkSync(full); const db = load(); addLog(db, 'backup_delete', { by: req.user.username, file }); save(db); res.json({ ok: true });
@@ -663,15 +724,15 @@ app.post('/api/dm/:userId', auth, chatLimiter, (req, res) => {
 app.post('/api/reports', auth, (req, res) => {
   const targetType = cleanText(req.body.targetType, 30), targetId = cleanText(req.body.targetId, 100), reason = cleanText(req.body.reason, 400);
   if (!['user','chat','team','dm'].includes(targetType) || !targetId || reason.length < 3) return res.status(400).json({ error: 'Báo cáo chưa hợp lệ' });
-  const db = load(); const report = { id: crypto.randomUUID(), reporterId: req.user.id, reporterUsername: req.user.username, targetType, targetId, reason, status: 'open', createdAt: new Date().toISOString() };
+  const db = load(); const report = { id: crypto.randomUUID(), reporterId: req.user.id, reporterUsername: req.user.username, targetType, targetId, reason, status: 'open', assignedTo:'', internalNote:'', history:[], createdAt: new Date().toISOString(), updatedAt:new Date().toISOString() };
   db.reports.push(report); if (db.reports.length > 1000) db.reports = db.reports.slice(-1000); addLog(db, 'report_create', { by: req.user.username, targetType, targetId }); save(db); res.json({ report });
 });
-app.get('/api/admin/reports', auth, admin, (req, res) => res.json({ reports: load().reports.slice(-300).reverse() }));
-app.post('/api/admin/reports/:id/resolve', auth, admin, (req, res) => {
+app.get('/api/admin/reports', auth, admin, requirePermission('manageReports'), (req, res) => res.json({ reports: load().reports.slice(-300).reverse() }));
+app.post('/api/admin/reports/:id/resolve', auth, admin, requirePermission('manageReports'), (req, res) => {
   const db = load(); const report = db.reports.find(r => r.id === req.params.id); if (!report) return res.status(404).json({ error: 'Không tìm thấy báo cáo' });
-  report.status = cleanText(req.body.status, 20) === 'dismissed' ? 'dismissed' : 'resolved'; report.resolvedAt = new Date().toISOString(); report.resolvedBy = req.user.username; addLog(db, 'report_resolve', { by: req.user.username, report: report.id, status: report.status }); save(db); res.json({ report });
+  report.status = cleanText(req.body.status, 20) === 'dismissed' ? 'dismissed' : 'resolved'; report.resolvedAt = new Date().toISOString(); report.updatedAt=report.resolvedAt; report.resolvedBy = req.user.username; report.assignedTo=report.assignedTo||req.user.username; report.history=Array.isArray(report.history)?report.history:[]; report.history.push({at:report.resolvedAt,by:req.user.username,status:report.status,note:report.internalNote||''}); addLog(db, 'report_resolve', { by: req.user.username, report: report.id, status: report.status }); save(db); res.json({ report });
 });
-app.post('/api/admin/user/:id/mute', auth, admin, (req, res) => {
+app.post('/api/admin/user/:id/mute', auth, admin, requirePermission('manageMembers'), (req, res) => {
   const db = load(); const target = db.users.find(u => u.id === req.params.id); if (!target) return res.status(404).json({ error: 'Không tìm thấy thành viên' });
   if (req.user.role !== 'Boss' && target.role === 'Boss') return res.status(403).json({ error: 'Kì Cựu không thể hạn chế Boss' });
   const minutes = Math.max(0, Math.min(10080, Number(req.body.minutes) || 0)); const reason = cleanText(req.body.reason, 200);
@@ -748,7 +809,7 @@ app.post('/api/team-match', auth, (req,res)=>{
 app.get('/api/events', auth, (req,res)=>{
   const db=load(); const events=(db.events||[]).slice().sort((a,b)=>new Date(a.startAt)-new Date(b.startAt)).map(e=>({...e,joined:(e.participants||[]).includes(req.user.id),checkedIn:(e.checkedIn||[]).includes(req.user.id),checkinCode:['Boss','Kì Cựu'].includes(req.user.role)?e.checkinCode:undefined})); res.json({events});
 });
-app.post('/api/events', auth, admin, (req,res)=>{
+app.post('/api/events', auth, admin, requirePermission('manageEvents'), (req,res)=>{
   const title=cleanText(req.body.title,100), description=cleanText(req.body.description,500), startAt=String(req.body.startAt||''), endAt=String(req.body.endAt||'');
   if(!title||!startAt||Number.isNaN(new Date(startAt).getTime())) return res.status(400).json({error:'Tên và thời gian sự kiện chưa hợp lệ'});
   const db=load(); const e={id:crypto.randomUUID(),title,description,startAt:new Date(startAt).toISOString(),endAt:endAt&&!Number.isNaN(new Date(endAt).getTime())?new Date(endAt).toISOString():'',createdBy:req.user.username,participants:[],checkedIn:[],checkinCode:crypto.randomBytes(3).toString('hex').toUpperCase(),createdAt:new Date().toISOString()}; db.events.push(e); addLog(db,'event_create',{by:req.user.username,event:title}); save(db); res.json({event:e});
@@ -759,8 +820,8 @@ app.post('/api/events/:id/join', auth, (req,res)=>{
 app.post('/api/events/:id/checkin', auth, (req,res)=>{
   const code=cleanText(req.body.code,20).toUpperCase(); const db=load(); const e=db.events.find(x=>x.id===req.params.id); if(!e)return res.status(404).json({error:'Không tìm thấy sự kiện'}); if(code!==String(e.checkinCode||'').toUpperCase())return res.status(400).json({error:'Mã check-in không đúng'}); e.checkedIn=e.checkedIn||[]; if(!e.checkedIn.includes(req.user.id)){e.checkedIn.push(req.user.id);addXp(db.users.find(u=>u.id===req.user.id),25,'event_checkin_'+e.id,0);} save(db); res.json({ok:true});
 });
-app.delete('/api/events/:id', auth, admin, (req,res)=>{ const db=load(); const i=db.events.findIndex(x=>x.id===req.params.id); if(i<0)return res.status(404).json({error:'Không tìm thấy sự kiện'}); const [e]=db.events.splice(i,1); addLog(db,'event_delete',{by:req.user.username,event:e.title}); save(db); res.json({ok:true}); });
-app.get('/api/admin/analytics', auth, admin, (req,res)=>{
+app.delete('/api/events/:id', auth, admin, requirePermission('manageEvents'), (req,res)=>{ const db=load(); const i=db.events.findIndex(x=>x.id===req.params.id); if(i<0)return res.status(404).json({error:'Không tìm thấy sự kiện'}); const [e]=db.events.splice(i,1); addLog(db,'event_delete',{by:req.user.username,event:e.title}); save(db); res.json({ok:true}); });
+app.get('/api/admin/analytics', auth, admin, requirePermission('viewAnalytics'), (req,res)=>{
   const db=load(), now=Date.now(), since24=now-86400000; const storageBytes=dir=>{let t=0;try{for(const f of fs.readdirSync(dir)){const p=path.join(dir,f);const st=fs.statSync(p);if(st.isFile())t+=st.size;}}catch{}return t;};
   const topXp=db.users.slice().sort((a,b)=>(b.xp||0)-(a.xp||0)).slice(0,5).map(u=>({id:u.id,displayName:u.displayName,xp:u.xp||0,level:levelFromXp(u.xp||0)}));
   res.json({users:db.users.length,online5m:db.users.filter(u=>u.lastSeen&&now-new Date(u.lastSeen).getTime()<300000).length,chat24h:db.chat.filter(m=>new Date(m.createdAt).getTime()>since24).length,teamOpen:db.teamPosts.filter(p=>p.status==='open').length,events:(db.events||[]).length,reportsOpen:db.reports.filter(r=>r.status==='open').length,backups:fs.readdirSync(backupDir).filter(f=>f.endsWith('.json')).length,storageBytes:storageBytes(dataDir)+storageBytes(uploadDir)+storageBytes(backupDir)+storageBytes(sessionDir),highlights:db.users.reduce((n,u)=>n+(u.highlights||[]).length,0),prestigeUsers:db.users.filter(u=>(u.prestige||0)>0).length,achievementTemplates:(db.achievementTemplates||[]).length,topXp});
@@ -794,18 +855,76 @@ app.delete('/api/highlights/:id', auth, (req,res)=>{
   const db=load(); const u=db.users.find(x=>x.id===req.user.id); const before=(u.highlights||[]).length;u.highlights=(u.highlights||[]).filter(h=>h.id!==req.params.id);if(u.highlights.length===before)return res.status(404).json({error:'Không tìm thấy highlight'});save(db);res.json({ok:true});
 });
 
-app.get('/api/admin/achievement-templates', auth, admin, (req,res)=>res.json({templates:load().achievementTemplates||[]}));
-app.post('/api/admin/achievement-templates', auth, admin, (req,res)=>{
+app.get('/api/admin/achievement-templates', auth, admin, requirePermission('manageAchievements'), (req,res)=>res.json({templates:load().achievementTemplates||[]}));
+app.post('/api/admin/achievement-templates', auth, admin, requirePermission('manageAchievements'), (req,res)=>{
   const title=cleanText(req.body.title,80), description=cleanText(req.body.description,240), icon=cleanText(req.body.icon||'🏆',8), rarity=cleanText(req.body.rarity||'Common',20); const xp=Math.max(0,Math.min(100,Number(req.body.xp)||0));
   if(!title)return res.status(400).json({error:'Chưa nhập tên thành tích'}); const allowed=new Set(['Common','Rare','Epic','Legendary']); const db=load(); const t={id:crypto.randomUUID(),title,description,icon,rarity:allowed.has(rarity)?rarity:'Common',xp,createdBy:req.user.username,createdAt:new Date().toISOString()};db.achievementTemplates.push(t);addLog(db,'achievement_template_create',{by:req.user.username,title});save(db);res.json({template:t});
 });
-app.delete('/api/admin/achievement-templates/:id', auth, admin, (req,res)=>{const db=load();const i=db.achievementTemplates.findIndex(t=>t.id===req.params.id);if(i<0)return res.status(404).json({error:'Không tìm thấy mẫu'});db.achievementTemplates.splice(i,1);save(db);res.json({ok:true});});
-app.post('/api/admin/achievement-templates/:id/award/:userId', auth, admin, (req,res)=>{
+app.delete('/api/admin/achievement-templates/:id', auth, admin, requirePermission('manageAchievements'), (req,res)=>{const db=load();const i=db.achievementTemplates.findIndex(t=>t.id===req.params.id);if(i<0)return res.status(404).json({error:'Không tìm thấy mẫu'});db.achievementTemplates.splice(i,1);save(db);res.json({ok:true});});
+app.post('/api/admin/achievement-templates/:id/award/:userId', auth, admin, requirePermission('manageAchievements'), (req,res)=>{
   const db=load(), t=db.achievementTemplates.find(x=>x.id===req.params.id), u=db.users.find(x=>x.id===req.params.userId);if(!t||!u)return res.status(404).json({error:'Không tìm thấy mẫu hoặc thành viên'});u.achievements=Array.isArray(u.achievements)?u.achievements:[];u.achievements.push({id:crypto.randomUUID(),title:t.title,description:t.description,icon:t.icon,rarity:t.rarity,awardedBy:req.user.username,awardedAt:new Date().toISOString()});if(t.xp)addXp(u,t.xp,'template_'+t.id,0);notifyUser(db,u.id,'achievement','Bạn nhận thành tích mới',`${t.icon} ${t.title}`,{route:'profile'});addLog(db,'achievement_template_award',{by:req.user.username,to:u.username,title:t.title});save(db);res.json({user:safeUser(u)});
 });
 
 app.post('/api/prestige', auth, (req,res)=>{
   const db=load(), u=db.users.find(x=>x.id===req.user.id); const level=levelFromXp(Number(u.xp||0)); if(level<5 || Number(u.xp||0)<1600)return res.status(400).json({error:'Cần đạt Level 5 (1600 XP) để Prestige'});u.prestige=Math.min(10,Number(u.prestige||0)+1);u.xp=0;u.xpMeta={};u.badges=Array.isArray(u.badges)?u.badges:[];u.badges.push({id:`prestige-${u.prestige}`,icon:'✦',name:`Prestige ${u.prestige}`,awardedAt:new Date().toISOString()});u.auraStatus='event';notifyUser(db,u.id,'prestige','Prestige thành công',`Bạn đã đạt Prestige ${u.prestige}!`,{route:'profile'});addLog(db,'prestige',{user:u.username,prestige:u.prestige});save(db);res.json({user:safeUser(u)});
+});
+
+
+// ===== v1.8 Professional System =====
+app.get('/api/version', (req,res)=>res.json({name:APP_NAME,version:APP_VERSION,serverTime:new Date().toISOString()}));
+app.get('/api/system/status', auth, (req,res)=>{
+  const db=load();
+  const dirSize=dir=>{let total=0;try{for(const f of fs.readdirSync(dir)){const p=path.join(dir,f),st=fs.statSync(p);if(st.isFile())total+=st.size;}}catch{}return total;};
+  let writable=true; try{const t=path.join(storageRoot,'.healthcheck');fs.writeFileSync(t,String(Date.now()));fs.unlinkSync(t);}catch{writable=false;}
+  const backups=fs.readdirSync(backupDir).filter(f=>/^db-.*\.json$/i.test(f)).map(f=>({f,t:fs.statSync(path.join(backupDir,f)).mtimeMs})).sort((a,b)=>b.t-a.t);
+  res.json({
+    app:{name:APP_NAME,version:APP_VERSION,node:process.version,uptimeSeconds:Math.floor(process.uptime()),serverTime:new Date().toISOString()},
+    backend:{ok:true}, database:{ok:fs.existsSync(dbPath),users:db.users.length,logs:db.logs.length},
+    storage:{ok:writable,root:storageRoot,bytes:dirSize(dataDir)+dirSize(uploadDir)+dirSize(backupDir)+dirSize(sessionDir),dataBytes:dirSize(dataDir),uploadBytes:dirSize(uploadDir),backupBytes:dirSize(backupDir),sessionBytes:dirSize(sessionDir)},
+    push:{ok:!!(vapidKeys.publicKey&&vapidKeys.privateKey),subscriptions:db.pushSubscriptions.length},
+    backup:{count:backups.length,lastAt:backups[0]?new Date(backups[0].t).toISOString():null,autoHours:Math.max(1,Number(process.env.AUTO_BACKUP_HOURS||6))}
+  });
+});
+
+app.get('/api/account/summary', auth, (req,res)=>{
+  const db=load(); const all=persistentSessionStore.readAll();
+  const sessions=Object.values(all).filter(s=>s?.uid===req.user.id).length;
+  res.json({user:safeUser(req.user),security:{twoFactorEnabled:!!req.user.twoFactorEnabled,sessions,recoveryCodesRemaining:(req.user.recoveryCodeHashes||[]).length},permissions:permissionMatrix(db)[req.user.role]||{}});
+});
+app.get('/api/account/export', auth, (req,res)=>{
+  const db=load(); const u=req.user;
+  const payload={exportedAt:new Date().toISOString(),version:APP_VERSION,profile:safeUser(u),friends:db.friendRequests.filter(r=>r.fromUserId===u.id||r.toUserId===u.id),notifications:db.notifications.filter(n=>n.userId===u.id),teamPosts:db.teamPosts.filter(p=>p.userId===u.id),directMessages:db.directMessages.filter(m=>m.userId===u.id||m.toUserId===u.id),reports:db.reports.filter(r=>r.reporterId===u.id)};
+  res.setHeader('Content-Disposition',`attachment; filename="giatoc-account-${u.username}.json"`); res.type('application/json').send(JSON.stringify(payload,null,2));
+});
+
+app.get('/api/notification-preferences', auth, (req,res)=>res.json({preferences:normalizeNotificationPrefs(req.user.notificationPrefs)}));
+app.post('/api/notification-preferences', auth, (req,res)=>{
+  const db=load(),u=db.users.find(x=>x.id===req.user.id); if(!u)return res.status(404).json({error:'Không tìm thấy tài khoản'});
+  const incoming=req.body||{}; const next={...normalizeNotificationPrefs(u.notificationPrefs)};
+  for(const k of ['pushEnabled','dm','mentions','friends','achievements','moderation','events','system','quietEnabled']) if(typeof incoming[k]==='boolean') next[k]=incoming[k];
+  if(/^([01]\d|2[0-3]):[0-5]\d$/.test(String(incoming.quietStart||''))) next.quietStart=String(incoming.quietStart);
+  if(/^([01]\d|2[0-3]):[0-5]\d$/.test(String(incoming.quietEnd||''))) next.quietEnd=String(incoming.quietEnd);
+  next.timezoneOffsetMinutes=Math.max(-720,Math.min(840,Number(incoming.timezoneOffsetMinutes)||0)); u.notificationPrefs=next;
+  addLog(db,'notification_preferences_update',{by:u.username,category:'security'}); save(db); res.json({preferences:next});
+});
+
+app.get('/api/admin/permissions', auth, admin, (req,res)=>{const db=load();res.json({matrix:permissionMatrix(db),keys:['manageMembers','manageAchievements','manageReports','manageBackups','viewAnalytics','manageEvents','viewAudit','managePermissions']});});
+app.post('/api/admin/permissions', auth, admin, bossOnly, (req,res)=>{
+  const db=load(),current=permissionMatrix(db),incoming=req.body?.matrix||{}; const roles=['Kì Cựu','Member']; const keys=Object.keys(DEFAULT_PERMISSION_MATRIX.Boss);
+  for(const role of roles){current[role]=current[role]||{};for(const key of keys) if(typeof incoming?.[role]?.[key]==='boolean') current[role][key]=incoming[role][key];}
+  current.Boss=structuredClone(DEFAULT_PERMISSION_MATRIX.Boss); db.permissionMatrix=current; addLog(db,'permission_matrix_update',{by:req.user.username,category:'security',after:current});save(db);res.json({matrix:current});
+});
+
+app.get('/api/admin/audit', auth, admin, requirePermission('viewAudit'), (req,res)=>{
+  const db=load(); const q=cleanText(req.query.q,80).toLowerCase(),category=cleanText(req.query.category,30); const limit=Math.max(20,Math.min(500,Number(req.query.limit)||150));
+  let logs=db.logs.slice().reverse(); if(category) logs=logs.filter(x=>x.category===category); if(q) logs=logs.filter(x=>JSON.stringify(x).toLowerCase().includes(q)); res.json({logs:logs.slice(0,limit)});
+});
+
+app.post('/api/admin/reports/:id/workflow', auth, admin, requirePermission('manageReports'), (req,res)=>{
+  const db=load(),report=db.reports.find(r=>r.id===req.params.id); if(!report)return res.status(404).json({error:'Không tìm thấy báo cáo'});
+  const allowed=new Set(['open','in_review','resolved','dismissed']); const status=cleanText(req.body.status,20); if(!allowed.has(status))return res.status(400).json({error:'Trạng thái không hợp lệ'});
+  const before={status:report.status,assignedTo:report.assignedTo||'',internalNote:report.internalNote||''}; report.status=status; report.assignedTo=cleanText(req.body.assignedTo||report.assignedTo||req.user.username,40); report.internalNote=cleanText(req.body.internalNote||report.internalNote||'',500); report.updatedAt=new Date().toISOString(); report.history=Array.isArray(report.history)?report.history:[]; report.history.push({at:report.updatedAt,by:req.user.username,status,note:report.internalNote}); if(['resolved','dismissed'].includes(status)){report.resolvedAt=report.updatedAt;report.resolvedBy=req.user.username;}
+  addLog(db,'report_workflow_update',{by:req.user.username,report:report.id,category:'moderation',before,after:{status:report.status,assignedTo:report.assignedTo,internalNote:report.internalNote}});save(db);res.json({report});
 });
 
 // ===== Session & Security Center v1.5 =====
@@ -909,6 +1028,6 @@ const autoBackupHours = Math.max(1, Math.min(168, Number(process.env.AUTO_BACKUP
 setInterval(() => { try { const file = createBackupFile(); console.log(`[Backup] Tự động: ${file}`); } catch (e) { console.error('[Backup] Tự động lỗi:', e.message); } }, autoBackupHours * 60 * 60 * 1000).unref?.();
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`GiaToc Name Hub v1.7.0 running on port ${PORT}`);
+  console.log(`GiaToc Name Hub v1.8.0 running on port ${PORT}`);
   console.log(`[Storage] ${storageRoot}`);
 });

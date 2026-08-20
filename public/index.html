@@ -11,7 +11,7 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
   <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="/style.css?v=1.7.0">
+  <link rel="stylesheet" href="/style.css?v=1.8.0">
 </head>
 <body>
 <div class="bg"></div>
@@ -59,7 +59,8 @@
       <button data-route="banner">🖼️ Banner tuyển thành viên</button>
       <button data-route="image-tool">✂️ Công cụ ảnh</button>
       <button data-route="music">🎵 Âm nhạc</button>
-      <button data-route="security">🔐 Bảo mật</button>
+      <button data-route="security">👤 Account Center</button>
+      <button data-route="status">🚦 System Status</button>
       <button id="adminNav" data-route="admin" hidden>🛡️ Quản trị</button>
     </nav>
 
@@ -203,6 +204,13 @@
         <section class="card"><div class="section-title"><h2>🔔 Trung tâm thông báo</h2><button class="ghost tiny" data-action="read-all-notifications">✓ Đánh dấu đã đọc</button></div><div id="notificationList" class="notification-list"></div></section>
         <section class="card"><div class="section-title"><h2>📲 Push Notification</h2><span id="pushStatus" class="status-pill">Đang kiểm tra...</span></div><p class="muted">Nhận thông báo khi có @mention, trả lời, lời mời kết bạn, DM, thành tích hoặc thay đổi Role.</p><div class="row"><button data-action="enable-push">🔔 Bật thông báo đẩy</button><button class="ghost" data-action="disable-push">Tắt trên thiết bị này</button></div><p class="muted">Quyền thông báo chỉ được hỏi sau khi bạn bấm nút Bật.</p></section>
       </div>
+      <section class="card notification-pref-card"><div class="section-title"><h2>⚙️ Tùy chọn thông báo</h2><span class="status-pill">Theo tài khoản</span></div>
+        <div class="pref-grid">
+          <label><input id="prefPushEnabled" type="checkbox"> Push tổng</label><label><input id="prefDm" type="checkbox"> DM & Reply</label><label><input id="prefMentions" type="checkbox"> @Mention</label><label><input id="prefFriends" type="checkbox"> Bạn bè</label><label><input id="prefAchievements" type="checkbox"> Thành tích & Role</label><label><input id="prefModeration" type="checkbox"> Bảo mật / Moderation</label><label><input id="prefEvents" type="checkbox"> Sự kiện</label><label><input id="prefSystem" type="checkbox"> Hệ thống</label>
+        </div>
+        <div class="row quiet-row"><label><input id="prefQuietEnabled" type="checkbox"> 🔕 Quiet Hours</label><div><label>Từ</label><input id="prefQuietStart" type="time" value="22:00"></div><div><label>Đến</label><input id="prefQuietEnd" type="time" value="07:00"></div></div>
+        <button data-action="save-notification-prefs">💾 Lưu tùy chọn thông báo</button>
+      </section>
     </section>
 
     <section class="page-section" data-section="friends" hidden>
@@ -296,7 +304,19 @@
       <section class="card"><div class="section-title"><h2>🎵 Trình phát nhạc</h2><span class="status-pill">Thư viện cộng đồng</span></div><input id="musicTitle" placeholder="Tên bài"><input id="musicUrl" placeholder="Link web / audio"><button data-action="add-music">Lưu nhạc</button><div id="musicList"></div></section>
     </section>
 
+    <section class="page-section" data-section="status" hidden>
+      <div class="two-col">
+        <section class="card"><div class="section-title"><h2>🚦 System Status</h2><button class="ghost tiny" data-action="load-system-status">Làm mới</button></div><div id="systemStatusGrid" class="status-grid"></div><p id="statusUpdatedAt" class="muted"></p></section>
+        <section class="card"><div class="section-title"><h2>📦 Version & Cache Manager</h2><span id="appVersionBadge" class="status-pill">v1.8.0</span></div>
+          <div id="cacheManagerInfo" class="status-list"></div>
+          <div class="row"><button data-action="check-app-update">🔎 Kiểm tra cập nhật</button><button class="ghost" data-action="update-app-now">⬆️ Cập nhật ngay</button><button class="ghost danger-outline" data-action="clear-app-cache">🧹 Xóa cache ứng dụng</button></div>
+          <p class="muted">Xóa cache ứng dụng không xóa tài khoản trên máy chủ. Dữ liệu Offline Queue được quản lý riêng trong Trung tâm Đồng bộ.</p>
+        </section>
+      </div>
+    </section>
+
     <section class="page-section" data-section="security" hidden>
+      <section class="card account-center-head"><div class="section-title"><h2>👤 Account Center</h2><span class="status-pill">Tài khoản & bảo mật</span></div><div id="accountSummary" class="account-summary"></div><div class="row"><button data-action="load-account-center">🔄 Làm mới</button><button class="ghost" data-action="export-account-data">📤 Xuất dữ liệu cá nhân</button></div></section>
       <div class="two-col">
         <section class="card"><div class="section-title"><h2>🔐 Đổi mật khẩu</h2><span class="status-pill">Bảo mật tài khoản</span></div><label>Mật khẩu hiện tại</label><input id="currentPassword" type="password" autocomplete="current-password"><label>Mật khẩu mới</label><input id="newPassword" type="password" minlength="8" autocomplete="new-password"><label>Nhập lại mật khẩu mới</label><input id="newPassword2" type="password" minlength="8" autocomplete="new-password"><button data-action="change-password">Đổi mật khẩu & đăng xuất thiết bị khác</button></section>
         <section class="card"><div class="section-title"><h2>📱 Thiết bị đang đăng nhập</h2><button class="ghost tiny" data-action="load-sessions">Làm mới</button></div><div id="sessionList" class="session-list"></div></section>
@@ -315,15 +335,18 @@
         <input id="adminSearch" placeholder="Tìm tên hiển thị hoặc tài khoản..." data-input-action="render-admin-users">
         <div class="admin-toolbar"><button data-action="backup">💾 Tạo backup dữ liệu</button><button class="ghost" data-action="load-backups">🗂️ Backup & Restore</button><button class="ghost" data-action="load-admin-reports">🚩 Báo cáo</button><button class="ghost" data-action="load-logs">📋 Nhật ký quản trị</button></div>
         <div id="users"></div><div id="logs" class="logs" hidden></div>
-        <div class="admin-subgrid"><section class="admin-subcard"><div class="section-title"><h3>🚩 Trung tâm báo cáo</h3><span class="status-pill">Moderation</span></div><div id="adminReports" class="report-list"></div></section><section class="admin-subcard"><div class="section-title"><h3>🗂️ Backup & Restore</h3><span id="backupPolicy" class="status-pill">Railway Volume</span></div><div id="backupList" class="backup-list"></div></section><section class="admin-subcard achievement-composer"><div class="section-title"><h3>🏅 Achievement Composer</h3><button class="ghost tiny" data-action="load-achievement-templates">Làm mới</button></div><div class="composer-form"><input id="achTemplateIcon" value="🏆" maxlength="8" placeholder="Icon"><input id="achTemplateTitle" placeholder="Tên thành tích"><select id="achTemplateRarity"><option>Common</option><option>Rare</option><option>Epic</option><option>Legendary</option></select><input id="achTemplateXp" type="number" min="0" max="100" value="20" placeholder="XP"><textarea id="achTemplateDescription" maxlength="240" placeholder="Mô tả thành tích"></textarea><button data-action="create-achievement-template">Tạo mẫu thành tích</button></div><div id="achievementTemplateList" class="template-list"></div></section><section class="admin-subcard analytics-wide"><div class="section-title"><h3>📈 Analytics quản trị</h3><button class="ghost tiny" data-action="load-analytics">Làm mới</button></div><div id="analyticsGrid" class="analytics-grid"></div><div id="analyticsTopXp"></div></section></div>
+        <div class="admin-subgrid"><section class="admin-subcard"><div class="section-title"><h3>🚩 Trung tâm báo cáo</h3><span class="status-pill">Moderation</span></div><div id="adminReports" class="report-list"></div></section><section class="admin-subcard"><div class="section-title"><h3>🗂️ Backup & Restore</h3><span id="backupPolicy" class="status-pill">Railway Volume</span></div><div id="backupList" class="backup-list"></div></section><section class="admin-subcard achievement-composer"><div class="section-title"><h3>🏅 Achievement Composer</h3><button class="ghost tiny" data-action="load-achievement-templates">Làm mới</button></div><div class="composer-form"><input id="achTemplateIcon" value="🏆" maxlength="8" placeholder="Icon"><input id="achTemplateTitle" placeholder="Tên thành tích"><select id="achTemplateRarity"><option>Common</option><option>Rare</option><option>Epic</option><option>Legendary</option></select><input id="achTemplateXp" type="number" min="0" max="100" value="20" placeholder="XP"><textarea id="achTemplateDescription" maxlength="240" placeholder="Mô tả thành tích"></textarea><button data-action="create-achievement-template">Tạo mẫu thành tích</button></div><div id="achievementTemplateList" class="template-list"></div></section><section class="admin-subcard analytics-wide"><div class="section-title"><h3>📈 Analytics quản trị</h3><button class="ghost tiny" data-action="load-analytics">Làm mới</button></div><div id="analyticsGrid" class="analytics-grid"></div><div id="analyticsTopXp"></div></section>
+          <section class="admin-subcard permission-card"><div class="section-title"><h3>🔐 Permission Matrix</h3><button class="ghost tiny" data-action="load-permissions">Làm mới</button></div><p class="muted">Boss cấu hình quyền chi tiết cho Kì Cựu và Member. Quyền Boss luôn đầy đủ.</p><div id="permissionMatrix" class="permission-matrix"></div><button id="savePermissionBtn" data-action="save-permissions">💾 Lưu Permission Matrix</button></section>
+          <section class="admin-subcard audit-card"><div class="section-title"><h3>📋 Audit Log</h3><button class="ghost tiny" data-action="load-audit">Làm mới</button></div><div class="audit-filters"><input id="auditSearch" placeholder="Tìm hành động, tài khoản, target..."><select id="auditCategory"><option value="">Tất cả nhóm</option><option value="system">System</option><option value="security">Security</option><option value="moderation">Moderation</option><option value="backup">Backup</option><option value="achievement">Achievement</option><option value="event">Event</option></select><button class="tiny" data-action="load-audit">Lọc</button></div><div id="auditLog" class="audit-list"></div></section>
+        </div>
       </section>
     </section>
   </section>
 </main>
-<script src="/vendor/qrcode.bundle.js?v=1.7.0"></script>
-<script src="/vendor/pdf-lib.min.js?v=1.7.0"></script>
-<script src="/offline-db.js?v=1.7.0"></script>
-<script src="/app.js?v=1.7.0"></script>
-<script src="/pwa.js?v=1.7.0"></script>
+<script src="/vendor/qrcode.bundle.js?v=1.8.0"></script>
+<script src="/vendor/pdf-lib.min.js?v=1.8.0"></script>
+<script src="/offline-db.js?v=1.8.0"></script>
+<script src="/app.js?v=1.8.0"></script>
+<script src="/pwa.js?v=1.8.0"></script>
 </body>
 </html>

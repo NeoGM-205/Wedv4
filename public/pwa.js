@@ -5,7 +5,7 @@ const installBtn = document.getElementById('installAppBtn');
 async function registerSW() {
   if (!('serviceWorker' in navigator)) return null;
   try {
-    const registration = await navigator.serviceWorker.register('/sw.js?v=1.7.0', { updateViaCache: 'none' });
+    const registration = await navigator.serviceWorker.register('/sw.js?v=1.8.0', { updateViaCache: 'none' });
     swRegistration = registration;
     await registration.update();
     return registration;
@@ -33,8 +33,8 @@ if ('serviceWorker' in navigator) {
   });
 
   navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (sessionStorage.getItem('sw-reloaded-v1.7.0')) return;
-    sessionStorage.setItem('sw-reloaded-v1.7.0', '1');
+    if (sessionStorage.getItem('sw-reloaded-v1.8.0')) return;
+    sessionStorage.setItem('sw-reloaded-v1.8.0', '1');
     location.reload();
   });
 
@@ -114,3 +114,34 @@ window.disablePushNotifications = async () => {
   window.refreshPushStatus?.();
 };
 window.addEventListener('load', () => setTimeout(() => window.refreshPushStatus?.(), 500));
+
+
+// ===== v1.8 Version & Cache Manager =====
+window.getAppCacheInfo = async () => {
+  const registration = swRegistration || await navigator.serviceWorker?.getRegistration?.();
+  const cacheKeys = 'caches' in window ? await caches.keys() : [];
+  return { version: '1.8.0', controlled: !!navigator.serviceWorker?.controller, waiting: !!registration?.waiting, installing: !!registration?.installing, cacheKeys };
+};
+window.checkForAppUpdate = async () => {
+  if (!('serviceWorker' in navigator)) throw new Error('Trình duyệt không hỗ trợ Service Worker.');
+  const registration = swRegistration || await navigator.serviceWorker.getRegistration();
+  if (!registration) throw new Error('Service Worker chưa được đăng ký.');
+  await registration.update();
+  return { waiting: !!registration.waiting, installing: !!registration.installing };
+};
+window.forceAppUpdate = async () => {
+  const registration = swRegistration || await navigator.serviceWorker.getRegistration();
+  if (!registration) throw new Error('Service Worker chưa sẵn sàng.');
+  await registration.update();
+  if (registration.waiting) registration.waiting.postMessage({ type: 'SKIP_WAITING' });
+  else if (registration.installing) {
+    registration.installing.addEventListener('statechange', () => {
+      if (registration.waiting) registration.waiting.postMessage({ type: 'SKIP_WAITING' });
+    });
+  } else location.reload();
+};
+window.clearAppCaches = async () => {
+  if ('caches' in window) await Promise.all((await caches.keys()).map(k => caches.delete(k)));
+  const registration = swRegistration || await navigator.serviceWorker?.getRegistration?.();
+  registration?.active?.postMessage({ type: 'CLEAR_ALL_CACHES' });
+};
