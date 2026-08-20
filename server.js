@@ -163,12 +163,12 @@ function migrateDirectoryOnce(sourceDir, targetDir) {
 }
 migrateDirectoryOnce(path.join(__dirname, 'public', 'uploads'), uploadDir);
 migrateDirectoryOnce(path.join(__dirname, 'backups'), backupDir);
-const defaultDb = { users: [], music: [], logs: [], chat: [], notifications: [], teamPosts: [], friendRequests: [], directMessages: [], reports: [], pushSubscriptions: [], events: [] };
+const defaultDb = { users: [], music: [], logs: [], chat: [], notifications: [], teamPosts: [], friendRequests: [], directMessages: [], reports: [], pushSubscriptions: [], events: [], achievementTemplates: [] };
 const normalizeDb = db => ({
   ...defaultDb, ...(db || {}),
   users: db?.users || [], music: db?.music || [], logs: db?.logs || [], chat: db?.chat || [],
   notifications: db?.notifications || [], teamPosts: db?.teamPosts || [], friendRequests: db?.friendRequests || [],
-  directMessages: db?.directMessages || [], reports: db?.reports || [], pushSubscriptions: db?.pushSubscriptions || [], events: db?.events || []
+  directMessages: db?.directMessages || [], reports: db?.reports || [], pushSubscriptions: db?.pushSubscriptions || [], events: db?.events || [], achievementTemplates: db?.achievementTemplates || []
 });
 const load = () => { try { return normalizeDb(JSON.parse(fs.readFileSync(dbPath, 'utf8'))); } catch { return structuredClone(defaultDb); } };
 const save = db => fs.writeFileSync(dbPath, JSON.stringify(normalizeDb(db), null, 2));
@@ -232,7 +232,15 @@ function safeUser(u) {
     xp: Number(u.xp || 0),
     level: levelFromXp(Number(u.xp || 0)),
     badges: Array.isArray(u.badges) ? u.badges : [],
-    twoFactorEnabled: !!u.twoFactorEnabled
+    twoFactorEnabled: !!u.twoFactorEnabled,
+    auraStatus: u.auraStatus || 'online',
+    availabilityDays: Array.isArray(u.availabilityDays) ? u.availabilityDays : [],
+    availabilityStart: u.availabilityStart || '',
+    availabilityEnd: u.availabilityEnd || '',
+    playStyle: u.playStyle || 'flex',
+    prestige: Number(u.prestige || 0),
+    toolbox: Array.isArray(u.toolbox) ? u.toolbox : ['chat','team','qr','avatar-tool'],
+    highlights: Array.isArray(u.highlights) ? u.highlights.slice(-24) : []
   };
 }
 
@@ -325,7 +333,7 @@ async function sendPushToUser(userId, payload = {}) {
 
 app.get('/api/health', (req, res) => res.json({
   ok: true,
-  version: '1.6.0',
+  version: '1.7.0',
   storage: { root: storageRoot, data: dataDir, uploads: uploadDir, backups: backupDir }
 }));
 
@@ -339,7 +347,9 @@ app.post('/api/register', async (req, res) => {
   const first = db.users.length === 0;
   const u = {
     id: crypto.randomUUID(), username, displayName, passwordHash: await bcrypt.hash(password, 12), role: first ? 'Boss' : 'Member', avatar: '', banned: false,
-    bio: '', games: '', gameId: '', discord: '', achievements: [], badges: [], xp: 0, xpMeta: {}, twoFactorEnabled: false, twoFactorSecret: '', twoFactorPendingSecret: '', recoveryCodeHashes: [], muteUntil: null, muteReason: '', createdAt: new Date().toISOString(), profileUpdatedAt: new Date().toISOString(), lastSeen: new Date().toISOString()
+    bio: '', games: '', gameId: '', discord: '', achievements: [], badges: [], xp: 0, xpMeta: {}, prestige: 0,
+    auraStatus: 'online', availabilityDays: [], availabilityStart: '', availabilityEnd: '', playStyle: 'flex', toolbox: ['chat','team','qr','avatar-tool'], highlights: [],
+    twoFactorEnabled: false, twoFactorSecret: '', twoFactorPendingSecret: '', recoveryCodeHashes: [], muteUntil: null, muteReason: '', createdAt: new Date().toISOString(), profileUpdatedAt: new Date().toISOString(), lastSeen: new Date().toISOString()
   };
   db.users.push(u);
   addLog(db, 'register', { user: u.username });
@@ -386,6 +396,14 @@ app.post('/api/profile', auth, (req, res) => {
   u.games = cleanText(req.body.games, 160);
   u.gameId = cleanText(req.body.gameId, 100);
   u.discord = cleanText(req.body.discord, 100);
+  const allowedAura = new Set(['online','looking','busy','event','chill']);
+  const auraStatus = cleanText(req.body.auraStatus, 20); if (allowedAura.has(auraStatus)) u.auraStatus = auraStatus;
+  const allowedStyles = new Set(['flex','chill','competitive','voice','quiet']);
+  const playStyle = cleanText(req.body.playStyle, 20); if (allowedStyles.has(playStyle)) u.playStyle = playStyle;
+  u.availabilityStart = /^([01]\d|2[0-3]):[0-5]\d$/.test(String(req.body.availabilityStart||'')) ? String(req.body.availabilityStart) : '';
+  u.availabilityEnd = /^([01]\d|2[0-3]):[0-5]\d$/.test(String(req.body.availabilityEnd||'')) ? String(req.body.availabilityEnd) : '';
+  u.availabilityDays = Array.isArray(req.body.availabilityDays) ? req.body.availabilityDays.map(x=>Number(x)).filter(x=>Number.isInteger(x)&&x>=0&&x<=6).slice(0,7) : (u.availabilityDays||[]);
+  if (Array.isArray(req.body.toolbox)) u.toolbox = [...new Set(req.body.toolbox.map(x=>cleanText(x,30)).filter(Boolean))].slice(0,6);
   u.profileUpdatedAt = new Date().toISOString();
   save(db);
   res.json({ user: safeUser(u) });
@@ -709,15 +727,21 @@ app.delete('/api/team-posts/:id', auth, (req, res) => {
 
 // ===== v1.6 Auto Match, Events, XP/Badges, Analytics =====
 app.post('/api/team-match', auth, (req,res)=>{
-  const db=load(); const game=cleanText(req.body.game,60).toLowerCase(), mode=cleanText(req.body.mode,80).toLowerCase(), server=cleanText(req.body.server,80).toLowerCase(), playTime=cleanText(req.body.playTime,80).toLowerCase();
+  const db=load();
+  const game=cleanText(req.body.game,60).toLowerCase(), mode=cleanText(req.body.mode,80).toLowerCase(), server=cleanText(req.body.server,80).toLowerCase(), playTime=cleanText(req.body.playTime,80).toLowerCase();
+  const style=cleanText(req.body.playStyle || req.user.playStyle,30).toLowerCase();
+  const days=Array.isArray(req.body.availabilityDays)?req.body.availabilityDays.map(Number).filter(x=>x>=0&&x<=6):(req.user.availabilityDays||[]);
   const now=Date.now();
   const matches=db.teamPosts.filter(p=>p.userId!==req.user.id && p.status==='open' && (!p.expiresAt || new Date(p.expiresAt).getTime()>now)).map(p=>{
-    let score=0; const reasons=[];
-    if(game && p.game?.toLowerCase()===game){score+=55;reasons.push('Cùng game');}
-    if(mode && p.mode?.toLowerCase().includes(mode)){score+=20;reasons.push('Cùng chế độ');}
-    if(server && p.server?.toLowerCase().includes(server)){score+=15;reasons.push('Cùng server/khu vực');}
+    const owner=db.users.find(u=>u.id===p.userId)||{}; let score=0; const reasons=[];
+    if(game && p.game?.toLowerCase()===game){score+=40;reasons.push('Cùng game');}
+    if(mode && p.mode?.toLowerCase().includes(mode)){score+=15;reasons.push('Cùng chế độ');}
+    if(server && p.server?.toLowerCase().includes(server)){score+=10;reasons.push('Cùng server/khu vực');}
     if(playTime && p.playTime?.toLowerCase().includes(playTime)){score+=10;reasons.push('Khớp giờ chơi');}
-    return {...p,score,reasons};
+    if(style && owner.playStyle && (style===owner.playStyle.toLowerCase() || style==='flex' || owner.playStyle==='flex')){score+=10;reasons.push('Phong cách phù hợp');}
+    const overlap=(owner.availabilityDays||[]).filter(d=>days.includes(d)); if(days.length && overlap.length){score+=15;reasons.push(`Trùng ${overlap.length} ngày rảnh`);}
+    const activity=owner.lastSeen?Math.max(0,5-Math.floor((now-new Date(owner.lastSeen).getTime())/86400000)):0; if(activity>0){score+=Math.min(5,activity);reasons.push('Hoạt động gần đây');}
+    return {...p,score:Math.min(100,score),reasons,playStyle:owner.playStyle||'flex',availabilityDays:owner.availabilityDays||[],prestige:Number(owner.prestige||0)};
   }).filter(x=>x.score>0).sort((a,b)=>b.score-a.score).slice(0,12);
   res.json({matches});
 });
@@ -739,7 +763,49 @@ app.delete('/api/events/:id', auth, admin, (req,res)=>{ const db=load(); const i
 app.get('/api/admin/analytics', auth, admin, (req,res)=>{
   const db=load(), now=Date.now(), since24=now-86400000; const storageBytes=dir=>{let t=0;try{for(const f of fs.readdirSync(dir)){const p=path.join(dir,f);const st=fs.statSync(p);if(st.isFile())t+=st.size;}}catch{}return t;};
   const topXp=db.users.slice().sort((a,b)=>(b.xp||0)-(a.xp||0)).slice(0,5).map(u=>({id:u.id,displayName:u.displayName,xp:u.xp||0,level:levelFromXp(u.xp||0)}));
-  res.json({users:db.users.length,online5m:db.users.filter(u=>u.lastSeen&&now-new Date(u.lastSeen).getTime()<300000).length,chat24h:db.chat.filter(m=>new Date(m.createdAt).getTime()>since24).length,teamOpen:db.teamPosts.filter(p=>p.status==='open').length,events:(db.events||[]).length,reportsOpen:db.reports.filter(r=>r.status==='open').length,backups:fs.readdirSync(backupDir).filter(f=>f.endsWith('.json')).length,storageBytes:storageBytes(dataDir)+storageBytes(uploadDir)+storageBytes(backupDir)+storageBytes(sessionDir),topXp});
+  res.json({users:db.users.length,online5m:db.users.filter(u=>u.lastSeen&&now-new Date(u.lastSeen).getTime()<300000).length,chat24h:db.chat.filter(m=>new Date(m.createdAt).getTime()>since24).length,teamOpen:db.teamPosts.filter(p=>p.status==='open').length,events:(db.events||[]).length,reportsOpen:db.reports.filter(r=>r.status==='open').length,backups:fs.readdirSync(backupDir).filter(f=>f.endsWith('.json')).length,storageBytes:storageBytes(dataDir)+storageBytes(uploadDir)+storageBytes(backupDir)+storageBytes(sessionDir),highlights:db.users.reduce((n,u)=>n+(u.highlights||[]).length,0),prestigeUsers:db.users.filter(u=>(u.prestige||0)>0).length,achievementTemplates:(db.achievementTemplates||[]).length,topXp});
+});
+
+
+// ===== v1.7 Unique Community: Pulse, Highlights, Achievement Composer, Prestige =====
+app.get('/api/community-pulse', auth, (req,res)=>{
+  const db=load(), now=Date.now(), since24=now-86400000;
+  const activeUsers=db.users.filter(u=>!u.banned && u.lastSeen && now-new Date(u.lastSeen).getTime()<300000);
+  const openPosts=db.teamPosts.filter(p=>p.status==='open' && (!p.expiresAt || new Date(p.expiresAt).getTime()>now));
+  const gameCounts={}; for(const p of openPosts){const g=p.game||'Khác';gameCounts[g]=(gameCounts[g]||0)+1;}
+  const hotGames=Object.entries(gameCounts).sort((a,b)=>b[1]-a[1]).slice(0,5).map(([game,count])=>({game,count}));
+  const upcoming=(db.events||[]).filter(e=>new Date(e.startAt).getTime()>=now).sort((a,b)=>new Date(a.startAt)-new Date(b.startAt)).slice(0,3).map(e=>({id:e.id,title:e.title,startAt:e.startAt,participants:(e.participants||[]).length}));
+  const recentAchievements=db.users.flatMap(u=>(u.achievements||[]).slice(-3).map(a=>({type:'achievement',displayName:u.displayName,title:a.title,at:a.awardedAt||u.profileUpdatedAt}))).sort((a,b)=>new Date(b.at)-new Date(a.at)).slice(0,5);
+  res.json({online:activeUsers.length,looking:openPosts.length,chat24h:db.chat.filter(m=>new Date(m.createdAt).getTime()>since24).length,hotGames,upcoming,recentAchievements});
+});
+
+app.get('/api/highlights', auth, (req,res)=>{
+  const db=load(); const u=db.users.find(x=>x.id===req.user.id); res.json({highlights:(u?.highlights||[]).slice().reverse()});
+});
+app.post('/api/highlights', auth, chatImageUpload.single('image'), (req,res)=>{
+  const db=load(); const u=db.users.find(x=>x.id===req.user.id); if(!u)return res.status(404).json({error:'Không tìm thấy tài khoản'});
+  const title=cleanText(req.body.title,80), game=cleanText(req.body.game,60), note=cleanText(req.body.note,240), externalUrl=cleanText(req.body.externalUrl,800);
+  let url=req.file?'/uploads/'+req.file.filename:'';
+  if(!url && externalUrl){try{const parsed=new URL(externalUrl); if(!['http:','https:'].includes(parsed.protocol))throw new Error(); url=parsed.toString();}catch{return res.status(400).json({error:'Link highlight không hợp lệ'});}}
+  if(!title||!url)return res.status(400).json({error:'Cần tên highlight và ảnh/link'});
+  u.highlights=Array.isArray(u.highlights)?u.highlights:[]; const h={id:crypto.randomUUID(),title,game,note,url,createdAt:new Date().toISOString()};u.highlights.push(h);if(u.highlights.length>24)u.highlights=u.highlights.slice(-24);addXp(u,8,'highlight_add',12*60*60*1000);save(db);res.json({highlight:h,user:safeUser(u)});
+});
+app.delete('/api/highlights/:id', auth, (req,res)=>{
+  const db=load(); const u=db.users.find(x=>x.id===req.user.id); const before=(u.highlights||[]).length;u.highlights=(u.highlights||[]).filter(h=>h.id!==req.params.id);if(u.highlights.length===before)return res.status(404).json({error:'Không tìm thấy highlight'});save(db);res.json({ok:true});
+});
+
+app.get('/api/admin/achievement-templates', auth, admin, (req,res)=>res.json({templates:load().achievementTemplates||[]}));
+app.post('/api/admin/achievement-templates', auth, admin, (req,res)=>{
+  const title=cleanText(req.body.title,80), description=cleanText(req.body.description,240), icon=cleanText(req.body.icon||'🏆',8), rarity=cleanText(req.body.rarity||'Common',20); const xp=Math.max(0,Math.min(100,Number(req.body.xp)||0));
+  if(!title)return res.status(400).json({error:'Chưa nhập tên thành tích'}); const allowed=new Set(['Common','Rare','Epic','Legendary']); const db=load(); const t={id:crypto.randomUUID(),title,description,icon,rarity:allowed.has(rarity)?rarity:'Common',xp,createdBy:req.user.username,createdAt:new Date().toISOString()};db.achievementTemplates.push(t);addLog(db,'achievement_template_create',{by:req.user.username,title});save(db);res.json({template:t});
+});
+app.delete('/api/admin/achievement-templates/:id', auth, admin, (req,res)=>{const db=load();const i=db.achievementTemplates.findIndex(t=>t.id===req.params.id);if(i<0)return res.status(404).json({error:'Không tìm thấy mẫu'});db.achievementTemplates.splice(i,1);save(db);res.json({ok:true});});
+app.post('/api/admin/achievement-templates/:id/award/:userId', auth, admin, (req,res)=>{
+  const db=load(), t=db.achievementTemplates.find(x=>x.id===req.params.id), u=db.users.find(x=>x.id===req.params.userId);if(!t||!u)return res.status(404).json({error:'Không tìm thấy mẫu hoặc thành viên'});u.achievements=Array.isArray(u.achievements)?u.achievements:[];u.achievements.push({id:crypto.randomUUID(),title:t.title,description:t.description,icon:t.icon,rarity:t.rarity,awardedBy:req.user.username,awardedAt:new Date().toISOString()});if(t.xp)addXp(u,t.xp,'template_'+t.id,0);notifyUser(db,u.id,'achievement','Bạn nhận thành tích mới',`${t.icon} ${t.title}`,{route:'profile'});addLog(db,'achievement_template_award',{by:req.user.username,to:u.username,title:t.title});save(db);res.json({user:safeUser(u)});
+});
+
+app.post('/api/prestige', auth, (req,res)=>{
+  const db=load(), u=db.users.find(x=>x.id===req.user.id); const level=levelFromXp(Number(u.xp||0)); if(level<5 || Number(u.xp||0)<1600)return res.status(400).json({error:'Cần đạt Level 5 (1600 XP) để Prestige'});u.prestige=Math.min(10,Number(u.prestige||0)+1);u.xp=0;u.xpMeta={};u.badges=Array.isArray(u.badges)?u.badges:[];u.badges.push({id:`prestige-${u.prestige}`,icon:'✦',name:`Prestige ${u.prestige}`,awardedAt:new Date().toISOString()});u.auraStatus='event';notifyUser(db,u.id,'prestige','Prestige thành công',`Bạn đã đạt Prestige ${u.prestige}!`,{route:'profile'});addLog(db,'prestige',{user:u.username,prestige:u.prestige});save(db);res.json({user:safeUser(u)});
 });
 
 // ===== Session & Security Center v1.5 =====
@@ -843,6 +909,6 @@ const autoBackupHours = Math.max(1, Math.min(168, Number(process.env.AUTO_BACKUP
 setInterval(() => { try { const file = createBackupFile(); console.log(`[Backup] Tự động: ${file}`); } catch (e) { console.error('[Backup] Tự động lỗi:', e.message); } }, autoBackupHours * 60 * 60 * 1000).unref?.();
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`GiaToc Name Hub v1.6.0 running on port ${PORT}`);
+  console.log(`GiaToc Name Hub v1.7.0 running on port ${PORT}`);
   console.log(`[Storage] ${storageRoot}`);
 });

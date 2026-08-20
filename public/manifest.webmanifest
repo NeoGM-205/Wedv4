@@ -2,7 +2,7 @@
   "id": "/",
   "name": "GiaTộc ┊Name Hub",
   "short_name": "GiaTộc Name",
-  "description": "GiaTộc ┊Name Hub v1.6: ghép đồng đội tự động, Level/XP/Huy hiệu, sự kiện, Profile Card, 2FA, Analytics và chat nâng cao.",
+  "description": "GiaTộc ┊Name Hub v1.7: Smart Match Score, Dynamic Role Aura, Highlight Vault, Auto Profile Showcase, Achievement Composer, Live Community Pulse, Smart Availability, Personal Toolbox và Prestige.",
   "lang": "vi",
   "dir": "ltr",
   "start_url": "/#overview",
@@ -150,6 +150,39 @@
       "name": "Profile Card",
       "short_name": "Profile Card",
       "url": "/#profile-card",
+      "icons": [
+        {
+          "src": "/icons/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    },
+    {
+      "name": "Auto Profile Showcase",
+      "short_name": "Showcase",
+      "url": "/#showcase",
+      "icons": [
+        {
+          "src": "/icons/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    },
+    {
+      "name": "Highlight Vault",
+      "short_name": "Highlights",
+      "url": "/#highlights",
+      "icons": [
+        {
+          "src": "/icons/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    },
+    {
+      "name": "Personal Toolbox",
+      "short_name": "Toolbox",
+      "url": "/#toolbox",
       "icons": [
         {
           "src": "/icons/icon-192.png",

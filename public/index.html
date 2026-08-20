@@ -11,7 +11,7 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
   <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="/style.css?v=1.6.0">
+  <link rel="stylesheet" href="/style.css?v=1.7.0">
 </head>
 <body>
 <div class="bg"></div>
@@ -45,7 +45,10 @@
       <button data-route="team">🤝 Tìm đồng đội</button>
       <button data-route="match">🎯 Ghép đội tự động</button>
       <button data-route="events">📅 Sự kiện</button>
-      <button data-route="profile-card">🪪 Profile Card</button>
+      <button data-route="profile-card">👤 Profile Card</button>
+      <button data-route="showcase">🖼️ Auto Profile Showcase</button>
+      <button data-route="highlights">🎬 Highlight Vault</button>
+      <button data-route="toolbox">🧰 Personal Toolbox</button>
       <button data-route="notifications">🔔 Thông báo <span id="notificationBadge" class="nav-badge" hidden>0</span></button>
       <button data-route="friends">👥 Bạn bè & DM</button>
       <button data-route="sync-center">🔄 Đồng bộ</button>
@@ -74,10 +77,12 @@
         <section class="card feature-overview">
           <div class="section-title"><h2>🧰 Tiện ích cộng đồng</h2><span class="status-pill">Web + PWA</span></div>
           <div class="quick-grid">
-            <button data-go="chat">💬 Trò chuyện</button><button data-go="team">🤝 Tìm đồng đội</button><button data-go="match">🎯 Ghép đội</button><button data-go="events">📅 Sự kiện</button><button data-go="profile-card">🪪 Profile Card</button><button data-go="notifications">🔔 Thông báo</button><button data-go="friends">👥 Bạn bè & DM</button><button data-go="sync-center">🔄 Đồng bộ</button><button data-go="avatar-tool">👑 Avatar Role</button><button data-go="qr">🔳 Tạo QR</button>
+            <button data-go="chat">💬 Trò chuyện</button><button data-go="team">🤝 Tìm đồng đội</button><button data-go="match">🎯 Ghép đội</button><button data-go="events">📅 Sự kiện</button><button data-go="profile-card">👤 Profile Card</button><button data-go="showcase">🖼️ Showcase</button><button data-go="highlights">🎬 Highlight Vault</button><button data-go="toolbox">🧰 Toolbox</button><button data-go="notifications">🔔 Thông báo</button><button data-go="friends">👥 Bạn bè & DM</button><button data-go="sync-center">🔄 Đồng bộ</button><button data-go="avatar-tool">👑 Avatar Role</button><button data-go="qr">🔳 Tạo QR</button>
             <button data-go="pdf">📄 PDF</button><button data-go="tournament">🏅 Bảng đấu</button><button data-go="banner">🖼️ Banner</button><button data-go="image-tool">✂️ Ảnh</button>
           </div>
         </section>
+        <section class="card pulse-card"><div class="section-title"><h2>🛰️ Live Community Pulse</h2><button class="ghost tiny" data-action="load-pulse">Làm mới</button></div><div id="communityPulse" class="pulse-grid"></div></section>
+        <section class="card"><div class="section-title"><h2>⚡ Personal Toolbox</h2><button class="ghost tiny" data-go="toolbox">Tùy chỉnh</button></div><div id="personalToolbox" class="quick-grid"></div></section>
       </div>
     </section>
 
@@ -95,11 +100,13 @@
           <label>Game đang chơi</label><input id="games" placeholder="Ví dụ: Roblox, Minecraft, Free Fire...">
           <label>ID game</label><input id="gameId" placeholder="UID / ID game chính">
           <label>Discord</label><input id="discord" placeholder="Tên Discord hoặc ID">
-          <button data-action="save-profile">💾 Lưu hồ sơ</button>
+          <div class="three-col compact-profile-settings"><div><label>Dynamic Role Aura</label><select id="auraStatus"><option value="online">🟢 Online</option><option value="looking">🎯 Đang tìm đội</option><option value="busy">🔴 Busy</option><option value="event">✨ Sự kiện / Prestige</option><option value="chill">🌙 Chill</option></select></div><div><label>Phong cách chơi</label><select id="playStyle"><option value="flex">Linh hoạt</option><option value="chill">Chill / giao lưu</option><option value="competitive">Try-hard / cạnh tranh</option><option value="voice">Ưu tiên voice</option><option value="quiet">Ít voice</option></select></div><div><label>Khung giờ rảnh</label><div class="row"><input id="availabilityStart" type="time"><input id="availabilityEnd" type="time"></div></div></div>
+          <label>Ngày thường rảnh</label><div id="availabilityDays" class="day-picker"><label><input type="checkbox" value="1"> T2</label><label><input type="checkbox" value="2"> T3</label><label><input type="checkbox" value="3"> T4</label><label><input type="checkbox" value="4"> T5</label><label><input type="checkbox" value="5"> T6</label><label><input type="checkbox" value="6"> T7</label><label><input type="checkbox" value="0"> CN</label></div>
+          <button data-action="save-profile">💾 Lưu hồ sơ & lịch rảnh</button>
         </section>
         <section class="card">
           <div class="section-title"><h2>🏅 Thành tích</h2><span id="achievementCount" class="status-pill">0 thành tích</span></div>
-          <div class="level-panel"><div><b id="levelLabel">Level 1</b><span id="xpLabel">0 XP</span></div><div class="xp-bar"><i id="xpProgress"></i></div><div id="badgeList" class="badge-list"></div></div><div id="achievementList" class="achievement-list"></div>
+          <div class="level-panel"><div><b id="levelLabel">Level 1</b><span id="xpLabel">0 XP</span></div><div class="xp-bar"><i id="xpProgress"></i></div><div id="badgeList" class="badge-list"></div><div class="prestige-row"><span id="prestigeLabel" class="status-pill">Prestige 0</span><button id="prestigeBtn" class="ghost tiny" data-action="prestige">✦ Prestige khi đạt Level 5</button></div></div><div id="achievementList" class="achievement-list"></div>
         </section>
       </div>
     </section>
@@ -139,6 +146,8 @@
           <label>Chế độ / mục tiêu</label><input id="matchMode" placeholder="Rank, sinh tồn, minigame...">
           <label>Server / khu vực</label><input id="matchServer" placeholder="VN / Asia / server cụ thể">
           <label>Giờ chơi</label><input id="matchTime" placeholder="20:00 / buổi tối...">
+          <label>Phong cách mong muốn</label><select id="matchPlayStyle"><option value="flex">Linh hoạt</option><option value="chill">Chill</option><option value="competitive">Try-hard</option><option value="voice">Voice</option><option value="quiet">Ít voice</option></select>
+          <p class="muted">Smart Match Score v2 còn tính lịch rảnh, phong cách và mức hoạt động gần đây.</p>
           <button data-action="find-team-match">✨ Tìm người phù hợp</button>
         </section>
         <section class="card"><div class="section-title"><h2>⭐ Kết quả phù hợp</h2><span id="matchCount" class="status-pill">0 kết quả</span></div><div id="matchResults" class="team-posts"><p class="muted">Nhập tiêu chí rồi bấm Tìm người phù hợp.</p></div></section>
@@ -159,8 +168,33 @@
     </section>
 
     <section class="page-section" data-section="profile-card" hidden>
-      <section class="card"><div class="section-title"><h2>🪪 Profile Card chia sẻ</h2><span class="status-pill offline-ready">Offline ✓ • PNG</span></div>
+      <section class="card"><div class="section-title"><h2>👤 Profile Card chia sẻ</h2><span class="status-pill offline-ready">Offline ✓ • PNG</span></div>
         <div class="tool-grid"><div class="controls"><p class="muted">Tạo card gồm avatar, Role, Level, XP, game, huy hiệu và QR dẫn tới website.</p><label>Link QR</label><input id="profileCardUrl" value="https://giatocnamehub.up.railway.app"><button data-action="draw-profile-card">Tạo Profile Card</button><button class="ghost" data-action="download-canvas" data-canvas="profileCardCanvas" data-filename="giatoc-profile-card.png">⬇️ Tải PNG</button></div><div class="canvas-wrap"><canvas id="profileCardCanvas" width="1200" height="630"></canvas></div></div>
+      </section>
+    </section>
+
+    <section class="page-section" data-section="showcase" hidden>
+      <section class="card"><div class="section-title"><h2>🖼️ Auto Profile Showcase</h2><span class="status-pill">Tự tổng hợp hồ sơ</span></div>
+        <p class="muted">Showcase tự lấy Role Aura, Prestige, Level, huy hiệu, thành tích, game và Highlight Vault để tạo một trang trưng bày riêng.</p>
+        <div id="profileShowcase" class="showcase-shell"></div>
+      </section>
+    </section>
+
+    <section class="page-section" data-section="highlights" hidden>
+      <div class="two-col"><section class="card"><div class="section-title"><h2>🎬 Highlight Vault</h2><span class="status-pill">Khoảnh khắc nổi bật</span></div>
+        <label>Tên highlight</label><input id="highlightTitle" placeholder="Ví dụ: Pha clutch đáng nhớ">
+        <label>Game</label><input id="highlightGame" placeholder="Minecraft / Roblox / Free Fire...">
+        <label>Ghi chú</label><textarea id="highlightNote" maxlength="240" placeholder="Mô tả ngắn..."></textarea>
+        <label>Ảnh/GIF (tối đa 3MB)</label><input id="highlightImage" type="file" accept="image/png,image/jpeg,image/webp,image/gif">
+        <label>Hoặc link highlight</label><input id="highlightUrl" placeholder="https://...">
+        <button data-action="add-highlight">➕ Lưu Highlight</button>
+      </section><section class="card"><div class="section-title"><h2>✨ Best Moments</h2><button class="ghost tiny" data-action="load-highlights">Làm mới</button></div><div id="highlightList" class="highlight-grid"></div></section></div>
+    </section>
+
+    <section class="page-section" data-section="toolbox" hidden>
+      <section class="card"><div class="section-title"><h2>🧰 Personal Toolbox</h2><span class="status-pill">Ghim tối đa 6 công cụ</span></div>
+        <p class="muted">Chọn các mục bạn hay dùng. Chúng sẽ xuất hiện thành thanh truy cập nhanh riêng trên trang Tổng quan.</p>
+        <div id="toolboxOptions" class="toolbox-options"></div><button data-action="save-toolbox">💾 Lưu Personal Toolbox</button>
       </section>
     </section>
 
@@ -281,15 +315,15 @@
         <input id="adminSearch" placeholder="Tìm tên hiển thị hoặc tài khoản..." data-input-action="render-admin-users">
         <div class="admin-toolbar"><button data-action="backup">💾 Tạo backup dữ liệu</button><button class="ghost" data-action="load-backups">🗂️ Backup & Restore</button><button class="ghost" data-action="load-admin-reports">🚩 Báo cáo</button><button class="ghost" data-action="load-logs">📋 Nhật ký quản trị</button></div>
         <div id="users"></div><div id="logs" class="logs" hidden></div>
-        <div class="admin-subgrid"><section class="admin-subcard"><div class="section-title"><h3>🚩 Trung tâm báo cáo</h3><span class="status-pill">Moderation</span></div><div id="adminReports" class="report-list"></div></section><section class="admin-subcard"><div class="section-title"><h3>🗂️ Backup & Restore</h3><span id="backupPolicy" class="status-pill">Railway Volume</span></div><div id="backupList" class="backup-list"></div></section><section class="admin-subcard analytics-wide"><div class="section-title"><h3>📈 Analytics quản trị</h3><button class="ghost tiny" data-action="load-analytics">Làm mới</button></div><div id="analyticsGrid" class="analytics-grid"></div><div id="analyticsTopXp"></div></section></div>
+        <div class="admin-subgrid"><section class="admin-subcard"><div class="section-title"><h3>🚩 Trung tâm báo cáo</h3><span class="status-pill">Moderation</span></div><div id="adminReports" class="report-list"></div></section><section class="admin-subcard"><div class="section-title"><h3>🗂️ Backup & Restore</h3><span id="backupPolicy" class="status-pill">Railway Volume</span></div><div id="backupList" class="backup-list"></div></section><section class="admin-subcard achievement-composer"><div class="section-title"><h3>🏅 Achievement Composer</h3><button class="ghost tiny" data-action="load-achievement-templates">Làm mới</button></div><div class="composer-form"><input id="achTemplateIcon" value="🏆" maxlength="8" placeholder="Icon"><input id="achTemplateTitle" placeholder="Tên thành tích"><select id="achTemplateRarity"><option>Common</option><option>Rare</option><option>Epic</option><option>Legendary</option></select><input id="achTemplateXp" type="number" min="0" max="100" value="20" placeholder="XP"><textarea id="achTemplateDescription" maxlength="240" placeholder="Mô tả thành tích"></textarea><button data-action="create-achievement-template">Tạo mẫu thành tích</button></div><div id="achievementTemplateList" class="template-list"></div></section><section class="admin-subcard analytics-wide"><div class="section-title"><h3>📈 Analytics quản trị</h3><button class="ghost tiny" data-action="load-analytics">Làm mới</button></div><div id="analyticsGrid" class="analytics-grid"></div><div id="analyticsTopXp"></div></section></div>
       </section>
     </section>
   </section>
 </main>
-<script src="/vendor/qrcode.bundle.js?v=1.6.0"></script>
-<script src="/vendor/pdf-lib.min.js?v=1.6.0"></script>
-<script src="/offline-db.js?v=1.6.0"></script>
-<script src="/app.js?v=1.6.0"></script>
-<script src="/pwa.js?v=1.6.0"></script>
+<script src="/vendor/qrcode.bundle.js?v=1.7.0"></script>
+<script src="/vendor/pdf-lib.min.js?v=1.7.0"></script>
+<script src="/offline-db.js?v=1.7.0"></script>
+<script src="/app.js?v=1.7.0"></script>
+<script src="/pwa.js?v=1.7.0"></script>
 </body>
 </html>

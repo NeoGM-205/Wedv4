@@ -1,6 +1,6 @@
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
-const CACHEABLE_GETS = new Set(['/api/me', '/api/members', '/api/music', '/api/friends', '/api/events']);
+const CACHEABLE_GETS = new Set(['/api/me', '/api/members', '/api/music', '/api/friends', '/api/events', '/api/community-pulse', '/api/highlights']);
 const isCacheableGet = url => CACHEABLE_GETS.has(url) || url.startsWith('/api/chat') || url.startsWith('/api/team-posts') || url.startsWith('/api/notifications') || url.startsWith('/api/dm/');
 let me = null;
 let adminCache = [];
@@ -27,8 +27,11 @@ const esc = s => String(s ?? '').replace(/[&<>'"]/g, c => ({ '&': '&amp;', '<': 
 const fmtDate = v => v ? new Date(v).toLocaleString('vi-VN') : '';
 const uid = () => globalThis.crypto?.randomUUID?.() || `local-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 function msg(t) { if ($('#msg')) $('#msg').textContent = t; }
-function avatarHTML(u, size = 'small') { const m = meta(u.role); return `<div class="role-avatar ${m.key} ${size}"><img src="${esc(avatarOf(u))}" alt="Avatar ${esc(u.displayName)}"><span class="role-crown">${m.icon}</span></div>`; }
+function avatarHTML(u, size = 'small') { const m = meta(u.role); return `<div class="role-avatar ${m.key} ${size} ${auraClass(u)}"><img src="${esc(avatarOf(u))}" alt="Avatar ${esc(u.displayName)}"><span class="role-crown">${m.icon}</span></div>`; }
 function isOnline() { return navigator.onLine !== false; }
+function auraClass(u){ const v=u?.auraStatus||'online'; return ['online','looking','busy','event','chill'].includes(v)?`aura-${v}`:'aura-online'; }
+const TOOLBOX_ITEMS=[['chat','💬 Chat'],['team','🤝 Tìm đội'],['match','🎯 Ghép đội'],['events','📅 Sự kiện'],['showcase','🖼️ Showcase'],['highlights','🎬 Highlights'],['profile-card','👤 Profile Card'],['qr','🔳 QR'],['pdf','📄 PDF'],['avatar-tool','👑 Avatar Role'],['banner','🖼️ Banner'],['image-tool','✂️ Ảnh'],['music','🎵 Nhạc'],['friends','👥 Bạn bè']];
+
 function httpError(message, status, data = {}) { const e = new Error(message); e.httpStatus = status; e.isHttp = true; e.data = data; return e; }
 
 async function snapshotPut(key, value) {
@@ -190,7 +193,7 @@ async function logout() {
 }
 
 function routeTo(route) {
-  const allowed = ['overview','profile','chat','team','match','events','profile-card','notifications','friends','sync-center','avatar-tool','qr','pdf','tournament','banner','image-tool','music','security','admin'];
+  const allowed = ['overview','profile','chat','team','match','events','profile-card','showcase','highlights','toolbox','notifications','friends','sync-center','avatar-tool','qr','pdf','tournament','banner','image-tool','music','security','admin'];
   if (!allowed.includes(route)) route = 'overview';
   if (route === 'admin' && !['Boss','Kì Cựu'].includes(me?.role)) route = 'overview';
   $$('.page-section').forEach(s => s.hidden = s.dataset.section !== route);
@@ -201,13 +204,16 @@ function routeTo(route) {
   if (route === 'match') { if ($('#matchGame') && $('#teamGame')) $('#matchGame').value=$('#teamGame').value; }
   if (route === 'events') loadEvents();
   if (route === 'profile-card') drawProfileCard();
+  if (route === 'showcase') renderProfileShowcase();
+  if (route === 'highlights') loadHighlights();
+  if (route === 'toolbox') renderToolboxOptions();
   if (route === 'notifications') { loadNotifications(); refreshPushStatus(); }
   if (route === 'friends') loadFriends();
   if (route === 'sync-center') renderSyncCenter();
   if (route === 'security') { loadSessions(); loadTwoFactorStatus(); }
   if (route === 'avatar-tool') drawRoleAvatar();
   if (route === 'banner') drawBanner();
-  if (route === 'admin' && isOnline()) { loadAdminReports(); loadBackups(); loadAnalytics(); }
+  if (route === 'admin' && isOnline()) { loadAdminReports(); loadBackups(); loadAnalytics(); loadAchievementTemplates(); }
   if (route === 'admin' && !isOnline()) $('#users').innerHTML = '<p class="offline-note">🟠 Quản trị tài khoản cần mạng. Các công cụ khác vẫn dùng offline được.</p>';
 }
 let routesReady = false;
@@ -233,7 +239,9 @@ function runUiAction(action, el) {
     'load-friends': loadFriends, 'render-friend-directory': renderFriendDirectory, 'send-dm': sendDM, 'refresh-sync-center': renderSyncCenter,
     'enable-push': enablePush, 'disable-push': disablePush, 'load-admin-reports': loadAdminReports, 'load-backups': loadBackups,
     'find-team-match': findTeamMatch, 'create-event': createEvent, 'draw-profile-card': drawProfileCard, 'search-chat': loadChat,
-    'setup-2fa': setupTwoFactor, 'confirm-2fa': confirmTwoFactor, 'disable-2fa': disableTwoFactor, 'load-analytics': loadAnalytics
+    'setup-2fa': setupTwoFactor, 'confirm-2fa': confirmTwoFactor, 'disable-2fa': disableTwoFactor, 'load-analytics': loadAnalytics,
+    'load-pulse': loadCommunityPulse, 'add-highlight': addHighlight, 'load-highlights': loadHighlights, 'save-toolbox': saveToolbox, 'prestige': prestige,
+    'load-achievement-templates': loadAchievementTemplates, 'create-achievement-template': createAchievementTemplate
   };
   if (action === 'download-canvas') return downloadCanvas(el.dataset.canvas, el.dataset.filename || 'download.png');
   if (action === 'rotate-image') return rotateImage(Number(el.dataset.deg) || 0);
@@ -267,6 +275,10 @@ function runUiAction(action, el) {
   if (action === 'resolve-report') return resolveReport(el.dataset.id, el.dataset.status || 'resolved');
   if (action === 'restore-backup') return restoreBackup(el.dataset.file);
   if (action === 'delete-backup') return deleteBackup(el.dataset.file);
+  if (action === 'delete-highlight') return deleteHighlight(el.dataset.id);
+  if (action === 'delete-achievement-template') return deleteAchievementTemplate(el.dataset.id);
+  if (action === 'award-achievement-template') return awardAchievementTemplate(el.dataset.id);
+
   const fn = actions[action]; if (fn) return fn();
 }
 
@@ -296,12 +308,15 @@ function setupInteractions() {
 function renderProfile() {
   if (!me) return;
   const m = meta(me.role);
-  $('#profileAvatarWrap').className = `role-avatar ${m.key} hero`; $('#avatar').src = avatarOf(me);
+  $('#profileAvatarWrap').className = `role-avatar ${m.key} hero ${auraClass(me)}`; $('#avatar').src = avatarOf(me);
   $('#name').textContent = me.displayName; $('#role').className = `role role-${m.key}`; $('#role').textContent = `${m.icon} ${m.label}`;
-  $('#profilePageAvatarWrap').className = `role-avatar ${m.key} hero`; $('#profilePageAvatar').src = avatarOf(me);
+  $('#profilePageAvatarWrap').className = `role-avatar ${m.key} hero ${auraClass(me)}`; $('#profilePageAvatar').src = avatarOf(me);
   $('#profilePageName').textContent = me.displayName; $('#profilePageRole').className = `role role-${m.key}`; $('#profilePageRole').textContent = `${m.icon} ${m.label}`;
   $('#profileJoinDate').textContent = `Tham gia: ${fmtDate(me.createdAt)}`;
   $('#newName').value = me.displayName || ''; $('#bio').value = me.bio || ''; $('#games').value = me.games || ''; $('#gameId').value = me.gameId || ''; $('#discord').value = me.discord || '';
+  if($('#auraStatus'))$('#auraStatus').value=me.auraStatus||'online'; if($('#playStyle'))$('#playStyle').value=me.playStyle||'flex'; if($('#availabilityStart'))$('#availabilityStart').value=me.availabilityStart||''; if($('#availabilityEnd'))$('#availabilityEnd').value=me.availabilityEnd||'';
+  $$('#availabilityDays input[type=checkbox]').forEach(x=>x.checked=(me.availabilityDays||[]).includes(Number(x.value)));
+
   renderAchievements(me.achievements || []);
   renderLevelBadges();
 }
@@ -313,6 +328,7 @@ function renderLevelBadges(){
   if(!me)return; const xp=Number(me.xp||0),level=Number(me.level||1),base=(level-1)*(level-1)*100,next=level*level*100,pct=Math.max(0,Math.min(100,((xp-base)/Math.max(1,next-base))*100));
   if($('#levelLabel'))$('#levelLabel').textContent=`Level ${level}`; if($('#xpLabel'))$('#xpLabel').textContent=`${xp} XP • còn ${Math.max(0,next-xp)} XP tới Level ${level+1}`; if($('#xpProgress'))$('#xpProgress').style.width=pct+'%';
   if($('#badgeList'))$('#badgeList').innerHTML=(me.badges||[]).map(b=>`<span class="badge-chip" title="${esc(b.name)}">${esc(b.icon||'🏅')} ${esc(b.name)}</span>`).join('')||'<span class="muted">Chưa có huy hiệu XP.</span>';
+  if($('#prestigeLabel'))$('#prestigeLabel').textContent=`✦ Prestige ${Number(me.prestige||0)}`; if($('#prestigeBtn'))$('#prestigeBtn').disabled=level<5;
 }
 async function show() {
   if (!me) {
@@ -323,14 +339,15 @@ async function show() {
   $('#adminNav').hidden = !['Boss','Kì Cựu'].includes(me.role);
   if($('#eventAdminCard')) $('#eventAdminCard').hidden=!['Boss','Kì Cựu'].includes(me.role);
   renderProfile();
-  await Promise.allSettled([members(), music(), adminUsers(), loadTeamPosts(), loadNotifications(), loadFriends()]);
+  await Promise.allSettled([members(), music(), adminUsers(), loadTeamPosts(), loadNotifications(), loadFriends(), loadCommunityPulse(), loadHighlights()]);
+  renderPersonalToolbox();
   setupRoutes(); routeTo(location.hash.slice(1) || 'overview');
   await updateOfflineStatus();
   if (isOnline()) { if ('SyncManager' in window) window.requestBackgroundSync?.(); else syncOfflineQueue(false); }
 }
 
 async function saveProfile() {
-  const payload = { displayName: $('#newName').value, bio: $('#bio').value, games: $('#games').value, gameId: $('#gameId').value, discord: $('#discord').value, baseUpdatedAt: me?.profileUpdatedAt || '' };
+  const payload = { displayName: $('#newName').value, bio: $('#bio').value, games: $('#games').value, gameId: $('#gameId').value, discord: $('#discord').value, auraStatus: $('#auraStatus')?.value || 'online', playStyle: $('#playStyle')?.value || 'flex', availabilityStart: $('#availabilityStart')?.value || '', availabilityEnd: $('#availabilityEnd')?.value || '', availabilityDays: $$('#availabilityDays input:checked').map(x=>Number(x.value)), toolbox: me?.toolbox || [], baseUpdatedAt: me?.profileUpdatedAt || '' };
   try {
     const j = await api('/api/profile', { method: 'POST', body: JSON.stringify(payload), queueIfOffline: 'profile' });
     if (j.queued) {
@@ -434,7 +451,7 @@ async function closeTeamPost(id){if(!requireOnline('Đổi trạng thái bài t�
 async function deleteTeamPost(id){if(!requireOnline('Xóa bài tìm đồng đội'))return;if(!confirm('Xóa bài này?'))return;try{await api(`/api/team-posts/${id}`,{method:'DELETE'});loadTeamPosts();}catch(e){alert(e.message)}}
 
 
-async function findTeamMatch(){if(!requireOnline('Ghép đồng đội tự động'))return;try{const j=await api('/api/team-match',{method:'POST',body:JSON.stringify({game:$('#matchGame').value,mode:$('#matchMode').value,server:$('#matchServer').value,playTime:$('#matchTime').value})});const a=j.matches||[];$('#matchCount').textContent=`${a.length} kết quả`;$('#matchResults').innerHTML=a.map(p=>`<article class="team-post"><div class="match-score">${p.score}%</div>${avatarHTML(p)}<div class="team-main"><b>${esc(p.displayName)}</b><h3>${esc(p.game)} ${p.mode?`• ${esc(p.mode)}`:''}</h3><p>${esc((p.reasons||[]).join(' • '))}</p><p>${p.server?`🌐 ${esc(p.server)} • `:''}${p.playTime?`🕒 ${esc(p.playTime)} • `:''}👥 Cần ${p.slots}</p><p>${esc(p.note||'')}</p></div></article>`).join('')||'<p class="muted">Chưa tìm thấy bài phù hợp. Thử nới tiêu chí.</p>';}catch(e){alert(e.message)}}
+async function findTeamMatch(){if(!requireOnline('Ghép đồng đội tự động'))return;try{const j=await api('/api/team-match',{method:'POST',body:JSON.stringify({game:$('#matchGame').value,mode:$('#matchMode').value,server:$('#matchServer').value,playTime:$('#matchTime').value,playStyle:$('#matchPlayStyle')?.value||me.playStyle,availabilityDays:me.availabilityDays||[]})});const ar=j.matches||[];$('#matchCount').textContent=`${ar.length} kết quả`;$('#matchResults').innerHTML=ar.map(p=>`<article class="team-post smart-match-card"><div class="match-score">${p.score}%</div>${avatarHTML(p)}<div class="team-main"><b>${esc(p.displayName)}</b><div class="match-meta"><span>${esc(p.playStyle||'flex')}</span>${p.prestige?`<span>✦ Prestige ${p.prestige}</span>`:''}</div><h3>${esc(p.game)} ${p.mode?`• ${esc(p.mode)}`:''}</h3><p>${esc((p.reasons||[]).join(' • '))}</p><p>${p.server?`🌐 ${esc(p.server)} • `:''}${p.playTime?`🕒 ${esc(p.playTime)} • `:''}👥 Cần ${p.slots}</p><p>${esc(p.note||'')}</p></div></article>`).join('')||'<p class="muted">Chưa tìm thấy bài phù hợp. Thử nới tiêu chí.</p>';}catch(e){alert(e.message)}}
 async function loadEvents(){if(!me)return;try{const j=await api('/api/events');const a=j.events||[];$('#eventList').innerHTML=a.map(e=>`<article class="event-card"><div><span class="status-pill">${e.checkedIn?'✅ Đã check-in':e.joined?'🟢 Đã đăng ký':'⚪ Chưa đăng ký'}</span><h3>${esc(e.title)}</h3><p>${esc(e.description||'')}</p><p>🕒 ${fmtDate(e.startAt)}${e.endAt?` → ${fmtDate(e.endAt)}`:''}</p><small>👥 ${(e.participants||[]).length} đăng ký • tạo bởi ${esc(e.createdBy)}</small>${e.checkinCode?`<p class="admin-code">Mã check-in: <b>${esc(e.checkinCode)}</b></p>`:''}</div><div class="event-actions"><button class="tiny" data-action="event-join" data-id="${e.id}">${e.joined?'Hủy đăng ký':'Tham gia'}</button>${e.joined&&!e.checkedIn?`<button class="tiny ghost" data-action="event-checkin" data-id="${e.id}">🎟️ Check-in</button>`:''}${['Boss','Kì Cựu'].includes(me.role)?`<button class="tiny danger" data-action="event-delete" data-id="${e.id}">Xóa</button>`:''}</div></article>`).join('')||'<p class="muted">Chưa có sự kiện.</p>';}catch(e){$('#eventList').innerHTML=`<p class="offline-note">${esc(e.message)}</p>`;}}
 async function createEvent(){if(!requireOnline('Tạo sự kiện'))return;try{await api('/api/events',{method:'POST',body:JSON.stringify({title:$('#eventTitle').value,description:$('#eventDescription').value,startAt:$('#eventStart').value,endAt:$('#eventEnd').value})});$('#eventTitle').value=$('#eventDescription').value='';await loadEvents();}catch(e){alert(e.message)}}
 async function toggleEventJoin(id){if(!requireOnline('Đăng ký sự kiện'))return;try{await api(`/api/events/${id}/join`,{method:'POST',body:'{}'});me=(await api('/api/me')).user;renderProfile();await loadEvents();}catch(e){alert(e.message)}}
@@ -446,7 +463,7 @@ async function loadTwoFactorStatus(){const st=$('#twoFactorStatus');if(!st||!me|
 async function setupTwoFactor(){if(!requireOnline('Thiết lập 2FA'))return;try{const j=await api('/api/security/2fa/setup',{method:'POST',body:'{}'});$('#twoFactorSetup').hidden=false;$('#twoFactorSecret').textContent=j.secret;await window.QRCode.toDataURL(j.uri,{width:260,margin:2}).then(url=>$('#twoFactorQr').src=url);}catch(e){alert(e.message)}}
 async function confirmTwoFactor(){const code=$('#twoFactorCode').value.trim();if(!code)return;try{const j=await api('/api/security/2fa/confirm',{method:'POST',body:JSON.stringify({code})});$('#twoFactorSetup').hidden=true;$('#recoveryCodes').innerHTML=`<h3>🔑 Recovery Codes — lưu ở nơi an toàn</h3><div class="codes-grid">${(j.recoveryCodes||[]).map(c=>`<code>${esc(c)}</code>`).join('')}</div><p class="muted">Mỗi mã chỉ dùng được một lần.</p>`;await loadTwoFactorStatus();me=(await api('/api/me')).user;}catch(e){alert(e.message)}}
 async function disableTwoFactor(){if(!requireOnline('Tắt 2FA'))return;const password=prompt('Nhập mật khẩu hiện tại để tắt 2FA:','');if(!password)return;try{await api('/api/security/2fa/disable',{method:'POST',body:JSON.stringify({password})});$('#recoveryCodes').innerHTML='';await loadTwoFactorStatus();me=(await api('/api/me')).user;alert('Đã tắt 2FA.');}catch(e){alert(e.message)}}
-async function loadAnalytics(){if(!me||!['Boss','Kì Cựu'].includes(me.role)||!isOnline()||!$('#analyticsGrid'))return;try{const j=await api('/api/admin/analytics');const rows=[['👥 Thành viên',j.users],['🟢 Online',j.online5m],['💬 Chat 24h',j.chat24h],['🤝 Bài tìm đội',j.teamOpen],['📅 Sự kiện',j.events],['🚩 Báo cáo mở',j.reportsOpen],['💾 Backup',j.backups],['🗂️ Storage',(j.storageBytes/1024/1024).toFixed(1)+' MB']];$('#analyticsGrid').innerHTML=rows.map(([k,v])=>`<div class="metric"><b>${k}</b><strong>${esc(v)}</strong></div>`).join('');$('#analyticsTopXp').innerHTML=`<h4>🏆 Top XP</h4>${(j.topXp||[]).map((u,i)=>`<div class="top-xp"><span>#${i+1} ${esc(u.displayName)}</span><b>Lv.${u.level} • ${u.xp} XP</b></div>`).join('')}`;}catch(e){$('#analyticsGrid').innerHTML=`<p class="offline-note">${esc(e.message)}</p>`;}}
+async function loadAnalytics(){if(!me||!['Boss','Kì Cựu'].includes(me.role)||!isOnline()||!$('#analyticsGrid'))return;try{const j=await api('/api/admin/analytics');const rows=[['👥 Thành viên',j.users],['🟢 Online',j.online5m],['💬 Chat 24h',j.chat24h],['🤝 Bài tìm đội',j.teamOpen],['📅 Sự kiện',j.events],['🎬 Highlights',j.highlights||0],['✦ Prestige',j.prestigeUsers||0],['🏅 Mẫu thành tích',j.achievementTemplates||0],['🚩 Báo cáo mở',j.reportsOpen],['💾 Backup',j.backups],['🗂️ Storage',(j.storageBytes/1024/1024).toFixed(1)+' MB']];$('#analyticsGrid').innerHTML=rows.map(([k,v])=>`<div class="metric"><b>${k}</b><strong>${esc(v)}</strong></div>`).join('');$('#analyticsTopXp').innerHTML=`<h4>🏆 Top XP</h4>${(j.topXp||[]).map((u,i)=>`<div class="top-xp"><span>#${i+1} ${esc(u.displayName)}</span><b>Lv.${u.level} • ${u.xp} XP</b></div>`).join('')}`;}catch(e){$('#analyticsGrid').innerHTML=`<p class="offline-note">${esc(e.message)}</p>`;}}
 
 async function loadNotifications(){ if(!me)return; try{const j=await api('/api/notifications'); const badge=$('#notificationBadge'); if(badge){badge.hidden=!j.unread;badge.textContent=j.unread||0;} const icon=n=>n.type==='achievement'?'🏆':n.type==='mention'?'@':n.type==='reply'?'↩️':n.type==='role'?'👑':n.type==='friend'?'👥':n.type==='dm'?'💬':n.type==='moderation'?'🛡️':'🔔'; $('#notificationList').innerHTML=(j.notifications||[]).map(n=>`<article class="notification-item ${n.read?'read':'unread'}" data-action="open-notification" data-id="${n.id}" data-route="${esc(n.route||'')}" data-room="${esc(n.room||'')}" data-dm="${esc(n.dmUserId||'')}"><div class="notification-icon">${icon(n)}</div><div><b>${esc(n.title)}</b><p>${esc(n.message)}</p><small>${fmtDate(n.createdAt)}</small></div></article>`).join('')||'<p class="muted">Chưa có thông báo.</p>'; }catch(e){$('#notificationList').innerHTML=`<p class="offline-note">${esc(e.message)}</p>`;} }
 async function readAllNotifications(){if(!requireOnline('Đánh dấu thông báo'))return;await api('/api/notifications/read',{method:'POST',body:'{}'});loadNotifications();}
@@ -611,6 +628,27 @@ function rotateImage(deg){imageToolRotation=(imageToolRotation+deg)%360;renderIm
 function renderImageTool(){
   const c=$('#imageToolCanvas');if(!c||!imageToolImg)return;const sx=Math.max(0,Number($('#cropX').value)||0),sy=Math.max(0,Number($('#cropY').value)||0),sw=Math.min(imageToolImg.width-sx,Math.max(1,Number($('#cropW').value)||imageToolImg.width)),sh=Math.min(imageToolImg.height-sy,Math.max(1,Number($('#cropH').value)||imageToolImg.height));const rot=((imageToolRotation%360)+360)%360; const swap=rot===90||rot===270;c.width=swap?sh:sw;c.height=swap?sw:sh;const ctx=c.getContext('2d');ctx.clearRect(0,0,c.width,c.height);ctx.save();if(rot===90){ctx.translate(c.width,0);ctx.rotate(Math.PI/2);}else if(rot===180){ctx.translate(c.width,c.height);ctx.rotate(Math.PI);}else if(rot===270){ctx.translate(0,c.height);ctx.rotate(-Math.PI/2);}ctx.drawImage(imageToolImg,sx,sy,sw,sh,0,0,sw,sh);ctx.restore();const wm=$('#watermarkText').value.trim();if(wm){const font=Math.max(20,Math.round(Math.min(c.width,c.height)*.05));ctx.font=`bold ${font}px Segoe UI`;ctx.textAlign='right';ctx.textBaseline='bottom';ctx.fillStyle='rgba(255,255,255,.76)';ctx.shadowColor='rgba(0,0,0,.8)';ctx.shadowBlur=5;ctx.fillText(wm,c.width-18,c.height-15);ctx.shadowBlur=0;}}
 function downloadEditedImage(){const c=$('#imageToolCanvas');if(!imageToolImg)return alert('Chọn ảnh trước.');renderImageTool();const type=$('#imageFormat').value;const quality=Number($('#imageQuality').value)||.9;const ext=type==='image/png'?'png':type==='image/webp'?'webp':'jpg';const a=document.createElement('a');a.href=c.toDataURL(type,quality);a.download=`giatoc-edited.${ext}`;a.click();}
+
+
+// ===== v1.7 Unique Community =====
+async function loadCommunityPulse(){if(!me||!$('#communityPulse'))return;try{const j=await api('/api/community-pulse');const hot=(j.hotGames||[]).map(x=>`${esc(x.game)} (${x.count})`).join(' • ')||'Chưa có';const next=(j.upcoming||[])[0];$('#communityPulse').innerHTML=`<div class="pulse-metric"><strong>${j.online||0}</strong><span>🟢 Online</span></div><div class="pulse-metric"><strong>${j.looking||0}</strong><span>🎯 Đang tìm đội</span></div><div class="pulse-metric"><strong>${j.chat24h||0}</strong><span>💬 Chat 24h</span></div><div class="pulse-wide"><b>🔥 Đang nổi:</b> ${hot}</div><div class="pulse-wide"><b>📅 Sắp tới:</b> ${next?`${esc(next.title)} • ${fmtDate(next.startAt)}`:'Chưa có sự kiện'}</div>`;}catch(e){$('#communityPulse').innerHTML=`<p class="offline-note">${esc(e.message)}</p>`;}}
+
+async function loadHighlights(){if(!me||!$('#highlightList'))return;try{const j=await api('/api/highlights');const list=j.highlights||[];me.highlights=list.slice().reverse();$('#highlightList').innerHTML=list.map(h=>`<article class="highlight-card"><div class="highlight-media">${/^\/uploads\//.test(h.url)||/^https?:/.test(h.url)?`<img src="${esc(h.url)}" alt="${esc(h.title)}" loading="lazy">`:''}</div><div><span class="status-pill">${esc(h.game||'Highlight')}</span><h3>${esc(h.title)}</h3><p>${esc(h.note||'')}</p><small>${fmtDate(h.createdAt)}</small><button class="tiny danger" data-action="delete-highlight" data-id="${h.id}">Xóa</button></div></article>`).join('')||'<p class="muted">Chưa có highlight. Lưu khoảnh khắc đầu tiên của bạn.</p>';renderProfileShowcase();}catch(e){$('#highlightList').innerHTML=`<p class="offline-note">${esc(e.message)}</p>`;}}
+async function addHighlight(){if(!requireOnline('Lưu Highlight'))return;const fd=new FormData();fd.append('title',$('#highlightTitle').value);fd.append('game',$('#highlightGame').value);fd.append('note',$('#highlightNote').value);fd.append('externalUrl',$('#highlightUrl').value);const f=$('#highlightImage').files[0];if(f)fd.append('image',f);const r=await fetch('/api/highlights',{method:'POST',body:fd,credentials:'same-origin'});const j=await r.json().catch(()=>({}));if(!r.ok)return alert(j.error||'Không thể lưu highlight');me=j.user||me;renderProfile();$('#highlightTitle').value=$('#highlightNote').value=$('#highlightUrl').value='';$('#highlightImage').value='';await loadHighlights();}
+async function deleteHighlight(id){if(!requireOnline('Xóa Highlight'))return;if(!confirm('Xóa highlight này?'))return;try{await api('/api/highlights/'+id,{method:'DELETE'});await loadHighlights();}catch(e){alert(e.message)}}
+
+function renderProfileShowcase(){if(!me||!$('#profileShowcase'))return;const m=meta(me.role),high=(me.highlights||[]).slice(0,6);$('#profileShowcase').innerHTML=`<div class="showcase-hero ${auraClass(me)}"><div class="showcase-profile">${avatarHTML(me,'hero')}<div><span class="role role-${m.key}">${m.icon} ${esc(me.role)}</span><h2>${esc(me.displayName)}</h2><p>${esc(me.bio||'Chưa có giới thiệu.')}</p><div class="showcase-stats"><span>Level ${me.level||1}</span><span>${me.xp||0} XP</span><span>✦ Prestige ${me.prestige||0}</span><span>🏆 ${(me.achievements||[]).length}</span></div></div></div><div class="badge-list">${(me.badges||[]).map(b=>`<span class="badge-chip">${esc(b.icon||'🏅')} ${esc(b.name)}</span>`).join('')}</div></div><div class="showcase-grid">${high.map(h=>`<article><img src="${esc(h.url)}" alt="${esc(h.title)}"><b>${esc(h.title)}</b><small>${esc(h.game||'')}</small></article>`).join('')||'<p class="muted">Highlight Vault sẽ tự xuất hiện tại đây.</p>'}</div>`;}
+
+function renderToolboxOptions(){if(!me||!$('#toolboxOptions'))return;const selected=new Set(me.toolbox||[]);$('#toolboxOptions').innerHTML=TOOLBOX_ITEMS.map(([route,label])=>`<label class="toolbox-option"><input type="checkbox" value="${route}" ${selected.has(route)?'checked':''}> <span>${label}</span></label>`).join('');}
+function renderPersonalToolbox(){if(!me||!$('#personalToolbox'))return;const selected=new Set(me.toolbox||[]);const items=TOOLBOX_ITEMS.filter(([r])=>selected.has(r)).slice(0,6);$('#personalToolbox').innerHTML=items.map(([route,label])=>`<button data-go="${route}">${label}</button>`).join('')||'<p class="muted">Chưa ghim công cụ. Bấm Tùy chỉnh.</p>';}
+async function saveToolbox(){const selected=$$('#toolboxOptions input:checked').map(x=>x.value).slice(0,6);if(!selected.length)return alert('Chọn ít nhất 1 mục.');const payload={displayName:me.displayName,bio:me.bio,games:me.games,gameId:me.gameId,discord:me.discord,auraStatus:me.auraStatus,playStyle:me.playStyle,availabilityStart:me.availabilityStart,availabilityEnd:me.availabilityEnd,availabilityDays:me.availabilityDays||[],toolbox:selected,baseUpdatedAt:me.profileUpdatedAt||''};try{const j=await api('/api/profile',{method:'POST',body:JSON.stringify(payload)});me=j.user;renderProfile();renderPersonalToolbox();alert('Đã lưu Personal Toolbox.');}catch(e){alert(e.message)}}
+
+async function prestige(){if(!requireOnline('Prestige'))return;if(!confirm('Prestige sẽ đưa XP về 0, giữ thành tích và tặng huy hiệu Prestige. Tiếp tục?'))return;try{const j=await api('/api/prestige',{method:'POST',body:'{}'});me=j.user;renderProfile();renderProfileShowcase();alert(`Prestige ${me.prestige} thành công!`);}catch(e){alert(e.message)}}
+
+async function loadAchievementTemplates(){if(!me||!['Boss','Kì Cựu'].includes(me.role)||!$('#achievementTemplateList'))return;try{const j=await api('/api/admin/achievement-templates');$('#achievementTemplateList').innerHTML=(j.templates||[]).map(t=>`<article class="template-row rarity-${String(t.rarity).toLowerCase()}"><div><b>${esc(t.icon)} ${esc(t.title)}</b><p>${esc(t.description||'')}</p><small>${esc(t.rarity)} • +${t.xp||0} XP</small></div><div class="compact-actions"><button class="tiny" data-action="award-achievement-template" data-id="${t.id}">Trao</button><button class="tiny danger" data-action="delete-achievement-template" data-id="${t.id}">Xóa</button></div></article>`).join('')||'<p class="muted">Chưa có mẫu thành tích.</p>';}catch(e){$('#achievementTemplateList').innerHTML=`<p class="offline-note">${esc(e.message)}</p>`;}}
+async function createAchievementTemplate(){if(!requireOnline('Tạo mẫu thành tích'))return;try{await api('/api/admin/achievement-templates',{method:'POST',body:JSON.stringify({icon:$('#achTemplateIcon').value,title:$('#achTemplateTitle').value,rarity:$('#achTemplateRarity').value,xp:Number($('#achTemplateXp').value)||0,description:$('#achTemplateDescription').value})});$('#achTemplateTitle').value=$('#achTemplateDescription').value='';await loadAchievementTemplates();}catch(e){alert(e.message)}}
+async function deleteAchievementTemplate(id){if(!requireOnline('Xóa mẫu thành tích'))return;if(!confirm('Xóa mẫu này?'))return;try{await api('/api/admin/achievement-templates/'+id,{method:'DELETE'});await loadAchievementTemplates();}catch(e){alert(e.message)}}
+async function awardAchievementTemplate(id){if(!requireOnline('Trao thành tích'))return;const q=prompt('Nhập username của thành viên nhận thành tích:','');if(!q)return;const target=adminCache.find(u=>u.username.toLowerCase()===q.trim().toLowerCase()||u.displayName.toLowerCase()===q.trim().toLowerCase());if(!target)return alert('Không tìm thấy thành viên trong danh sách quản trị.');try{await api(`/api/admin/achievement-templates/${id}/award/${target.id}`,{method:'POST',body:'{}'});alert('Đã trao thành tích.');await adminUsers();}catch(e){alert(e.message)}}
 
 setInterval(() => { if ($('#clock')) $('#clock').textContent = new Date().toLocaleString('vi-VN'); }, 1000);
 setInterval(() => { if (me && isOnline()) fetch('/api/ping', { method: 'POST', credentials: 'same-origin' }).then(() => members()).catch(()=>{}); }, 60000);
