@@ -11,7 +11,7 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
   <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="/style.css?v=1.5.0">
+  <link rel="stylesheet" href="/style.css?v=1.6.0">
 </head>
 <body>
 <div class="bg"></div>
@@ -43,6 +43,9 @@
       <button data-route="profile">🏆 Thành tích & Hồ sơ</button>
       <button data-route="chat">💬 Trò chuyện</button>
       <button data-route="team">🤝 Tìm đồng đội</button>
+      <button data-route="match">🎯 Ghép đội tự động</button>
+      <button data-route="events">📅 Sự kiện</button>
+      <button data-route="profile-card">🪪 Profile Card</button>
       <button data-route="notifications">🔔 Thông báo <span id="notificationBadge" class="nav-badge" hidden>0</span></button>
       <button data-route="friends">👥 Bạn bè & DM</button>
       <button data-route="sync-center">🔄 Đồng bộ</button>
@@ -71,7 +74,7 @@
         <section class="card feature-overview">
           <div class="section-title"><h2>🧰 Tiện ích cộng đồng</h2><span class="status-pill">Web + PWA</span></div>
           <div class="quick-grid">
-            <button data-go="chat">💬 Trò chuyện</button><button data-go="team">🤝 Tìm đồng đội</button><button data-go="notifications">🔔 Thông báo</button><button data-go="friends">👥 Bạn bè & DM</button><button data-go="sync-center">🔄 Đồng bộ</button><button data-go="avatar-tool">👑 Avatar Role</button><button data-go="qr">🔳 Tạo QR</button>
+            <button data-go="chat">💬 Trò chuyện</button><button data-go="team">🤝 Tìm đồng đội</button><button data-go="match">🎯 Ghép đội</button><button data-go="events">📅 Sự kiện</button><button data-go="profile-card">🪪 Profile Card</button><button data-go="notifications">🔔 Thông báo</button><button data-go="friends">👥 Bạn bè & DM</button><button data-go="sync-center">🔄 Đồng bộ</button><button data-go="avatar-tool">👑 Avatar Role</button><button data-go="qr">🔳 Tạo QR</button>
             <button data-go="pdf">📄 PDF</button><button data-go="tournament">🏅 Bảng đấu</button><button data-go="banner">🖼️ Banner</button><button data-go="image-tool">✂️ Ảnh</button>
           </div>
         </section>
@@ -96,7 +99,7 @@
         </section>
         <section class="card">
           <div class="section-title"><h2>🏅 Thành tích</h2><span id="achievementCount" class="status-pill">0 thành tích</span></div>
-          <div id="achievementList" class="achievement-list"></div>
+          <div class="level-panel"><div><b id="levelLabel">Level 1</b><span id="xpLabel">0 XP</span></div><div class="xp-bar"><i id="xpProgress"></i></div><div id="badgeList" class="badge-list"></div></div><div id="achievementList" class="achievement-list"></div>
         </section>
       </div>
     </section>
@@ -104,9 +107,11 @@
     <section class="page-section" data-section="chat" hidden>
       <section class="card chat-card">
         <div class="section-title"><h2>💬 Trò chuyện nâng cao</h2><span id="chatConnectionState" class="status-pill">Online • tự làm mới</span></div>
-        <div class="chat-toolbar"><select id="chatRoom" data-change-action="change-chat-room"><option value="general">🌐 Chat chung</option><option value="oxide">☣️ Oxide</option><option value="minecraft">⛏️ Minecraft</option><option value="playtogether">🌴 Play Together</option><option value="roblox">🧱 Roblox</option><option value="freefire">🔥 Free Fire</option></select><span class="muted">Dùng @username để nhắc thành viên</span></div>
+        <div class="chat-toolbar"><select id="chatRoom" data-change-action="change-chat-room"><option value="general">🌐 Chat chung</option><option value="oxide">☣️ Oxide</option><option value="minecraft">⛏️ Minecraft</option><option value="playtogether">🌴 Play Together</option><option value="roblox">🧱 Roblox</option><option value="freefire">🔥 Free Fire</option></select><input id="chatSearch" placeholder="🔎 Tìm trong phòng chat..." data-input-action="search-chat"><span class="muted">@username để nhắc thành viên</span></div>
+        <div id="pinnedMessages" class="pinned-messages"></div>
         <div id="chatReplyBar" class="reply-bar" hidden></div>
         <div id="chatMessages" class="chat-messages"></div>
+        <div class="chat-attachment-row"><input id="chatImage" type="file" accept="image/png,image/jpeg,image/webp,image/gif"><small>Ảnh tối đa 3MB • gửi ảnh cần mạng</small></div>
         <div class="chat-compose"><input id="chatInput" maxlength="500" placeholder="Nhập tin nhắn..." data-enter-action="send-chat"><button data-action="send-chat">Gửi</button></div>
       </section>
     </section>
@@ -123,6 +128,40 @@
         </section>
         <section class="card"><div class="section-title"><h2>📋 Bài đang tìm</h2><button class="ghost tiny" data-action="load-team-posts">Làm mới</button></div><div id="teamPosts" class="team-posts"></div></section>
       </div>
+    </section>
+
+
+    <section class="page-section" data-section="match" hidden>
+      <div class="two-col">
+        <section class="card"><div class="section-title"><h2>🎯 Ghép đồng đội tự động</h2><span class="status-pill">Smart Match</span></div>
+          <p class="muted">Hệ thống chấm điểm các bài đang tìm đồng đội dựa trên game, chế độ, server/khu vực và giờ chơi.</p>
+          <label>Game</label><select id="matchGame"><option>Roblox</option><option>Minecraft</option><option>Free Fire</option><option>Play Together</option><option>Oxide</option></select>
+          <label>Chế độ / mục tiêu</label><input id="matchMode" placeholder="Rank, sinh tồn, minigame...">
+          <label>Server / khu vực</label><input id="matchServer" placeholder="VN / Asia / server cụ thể">
+          <label>Giờ chơi</label><input id="matchTime" placeholder="20:00 / buổi tối...">
+          <button data-action="find-team-match">✨ Tìm người phù hợp</button>
+        </section>
+        <section class="card"><div class="section-title"><h2>⭐ Kết quả phù hợp</h2><span id="matchCount" class="status-pill">0 kết quả</span></div><div id="matchResults" class="team-posts"><p class="muted">Nhập tiêu chí rồi bấm Tìm người phù hợp.</p></div></section>
+      </div>
+    </section>
+
+    <section class="page-section" data-section="events" hidden>
+      <div class="two-col">
+        <section class="card"><div class="section-title"><h2>📅 Trung tâm sự kiện</h2><span class="status-pill">Đăng ký & Check-in</span></div><div id="eventList" class="event-list"></div></section>
+        <section id="eventAdminCard" class="card" hidden><div class="section-title"><h2>➕ Tạo sự kiện</h2><span class="status-pill">Boss / Kì Cựu</span></div>
+          <label>Tên sự kiện</label><input id="eventTitle" placeholder="Giải đấu / buổi chơi chung...">
+          <label>Mô tả</label><textarea id="eventDescription" maxlength="500"></textarea>
+          <label>Bắt đầu</label><input id="eventStart" type="datetime-local">
+          <label>Kết thúc</label><input id="eventEnd" type="datetime-local">
+          <button data-action="create-event">Tạo sự kiện</button>
+        </section>
+      </div>
+    </section>
+
+    <section class="page-section" data-section="profile-card" hidden>
+      <section class="card"><div class="section-title"><h2>🪪 Profile Card chia sẻ</h2><span class="status-pill offline-ready">Offline ✓ • PNG</span></div>
+        <div class="tool-grid"><div class="controls"><p class="muted">Tạo card gồm avatar, Role, Level, XP, game, huy hiệu và QR dẫn tới website.</p><label>Link QR</label><input id="profileCardUrl" value="https://giatocnamehub.up.railway.app"><button data-action="draw-profile-card">Tạo Profile Card</button><button class="ghost" data-action="download-canvas" data-canvas="profileCardCanvas" data-filename="giatoc-profile-card.png">⬇️ Tải PNG</button></div><div class="canvas-wrap"><canvas id="profileCardCanvas" width="1200" height="630"></canvas></div></div>
+      </section>
     </section>
 
     <section class="page-section" data-section="notifications" hidden>
@@ -228,6 +267,12 @@
         <section class="card"><div class="section-title"><h2>🔐 Đổi mật khẩu</h2><span class="status-pill">Bảo mật tài khoản</span></div><label>Mật khẩu hiện tại</label><input id="currentPassword" type="password" autocomplete="current-password"><label>Mật khẩu mới</label><input id="newPassword" type="password" minlength="8" autocomplete="new-password"><label>Nhập lại mật khẩu mới</label><input id="newPassword2" type="password" minlength="8" autocomplete="new-password"><button data-action="change-password">Đổi mật khẩu & đăng xuất thiết bị khác</button></section>
         <section class="card"><div class="section-title"><h2>📱 Thiết bị đang đăng nhập</h2><button class="ghost tiny" data-action="load-sessions">Làm mới</button></div><div id="sessionList" class="session-list"></div></section>
       </div>
+      <section class="card twofa-card"><div class="section-title"><h2>🛡️ Xác thực 2 bước (2FA)</h2><span id="twoFactorStatus" class="status-pill">Đang kiểm tra...</span></div>
+        <p class="muted">Dùng Google Authenticator, Microsoft Authenticator hoặc ứng dụng TOTP tương thích.</p>
+        <div class="row"><button data-action="setup-2fa">Tạo mã thiết lập 2FA</button><button class="ghost danger-outline" data-action="disable-2fa">Tắt 2FA</button></div>
+        <div id="twoFactorSetup" hidden><div class="two-col"><div><img id="twoFactorQr" class="twofa-qr" alt="QR 2FA"><p>Mã bí mật: <code id="twoFactorSecret"></code></p></div><div><label>Nhập mã 6 số từ ứng dụng</label><input id="twoFactorCode" inputmode="numeric" maxlength="6"><button data-action="confirm-2fa">Xác nhận bật 2FA</button></div></div></div>
+        <div id="recoveryCodes" class="recovery-codes"></div>
+      </section>
     </section>
 
     <section id="admin" class="page-section" data-section="admin" hidden>
@@ -236,15 +281,15 @@
         <input id="adminSearch" placeholder="Tìm tên hiển thị hoặc tài khoản..." data-input-action="render-admin-users">
         <div class="admin-toolbar"><button data-action="backup">💾 Tạo backup dữ liệu</button><button class="ghost" data-action="load-backups">🗂️ Backup & Restore</button><button class="ghost" data-action="load-admin-reports">🚩 Báo cáo</button><button class="ghost" data-action="load-logs">📋 Nhật ký quản trị</button></div>
         <div id="users"></div><div id="logs" class="logs" hidden></div>
-        <div class="admin-subgrid"><section class="admin-subcard"><div class="section-title"><h3>🚩 Trung tâm báo cáo</h3><span class="status-pill">Moderation</span></div><div id="adminReports" class="report-list"></div></section><section class="admin-subcard"><div class="section-title"><h3>🗂️ Backup & Restore</h3><span id="backupPolicy" class="status-pill">Railway Volume</span></div><div id="backupList" class="backup-list"></div></section></div>
+        <div class="admin-subgrid"><section class="admin-subcard"><div class="section-title"><h3>🚩 Trung tâm báo cáo</h3><span class="status-pill">Moderation</span></div><div id="adminReports" class="report-list"></div></section><section class="admin-subcard"><div class="section-title"><h3>🗂️ Backup & Restore</h3><span id="backupPolicy" class="status-pill">Railway Volume</span></div><div id="backupList" class="backup-list"></div></section><section class="admin-subcard analytics-wide"><div class="section-title"><h3>📈 Analytics quản trị</h3><button class="ghost tiny" data-action="load-analytics">Làm mới</button></div><div id="analyticsGrid" class="analytics-grid"></div><div id="analyticsTopXp"></div></section></div>
       </section>
     </section>
   </section>
 </main>
-<script src="/vendor/qrcode.bundle.js?v=1.5.0"></script>
-<script src="/vendor/pdf-lib.min.js?v=1.5.0"></script>
-<script src="/offline-db.js?v=1.5.0"></script>
-<script src="/app.js?v=1.5.0"></script>
-<script src="/pwa.js?v=1.5.0"></script>
+<script src="/vendor/qrcode.bundle.js?v=1.6.0"></script>
+<script src="/vendor/pdf-lib.min.js?v=1.6.0"></script>
+<script src="/offline-db.js?v=1.6.0"></script>
+<script src="/app.js?v=1.6.0"></script>
+<script src="/pwa.js?v=1.6.0"></script>
 </body>
 </html>

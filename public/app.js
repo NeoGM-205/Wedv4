@@ -1,6 +1,6 @@
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
-const CACHEABLE_GETS = new Set(['/api/me', '/api/members', '/api/music', '/api/friends']);
+const CACHEABLE_GETS = new Set(['/api/me', '/api/members', '/api/music', '/api/friends', '/api/events']);
 const isCacheableGet = url => CACHEABLE_GETS.has(url) || url.startsWith('/api/chat') || url.startsWith('/api/team-posts') || url.startsWith('/api/notifications') || url.startsWith('/api/dm/');
 let me = null;
 let adminCache = [];
@@ -29,7 +29,7 @@ const uid = () => globalThis.crypto?.randomUUID?.() || `local-${Date.now()}-${Ma
 function msg(t) { if ($('#msg')) $('#msg').textContent = t; }
 function avatarHTML(u, size = 'small') { const m = meta(u.role); return `<div class="role-avatar ${m.key} ${size}"><img src="${esc(avatarOf(u))}" alt="Avatar ${esc(u.displayName)}"><span class="role-crown">${m.icon}</span></div>`; }
 function isOnline() { return navigator.onLine !== false; }
-function httpError(message, status) { const e = new Error(message); e.httpStatus = status; e.isHttp = true; return e; }
+function httpError(message, status, data = {}) { const e = new Error(message); e.httpStatus = status; e.isHttp = true; e.data = data; return e; }
 
 async function snapshotPut(key, value) {
   try { await window.OfflineDB?.putSnapshot(key, value); } catch (e) { console.warn('Offline snapshot:', e); }
@@ -45,7 +45,7 @@ async function api(url, opt = {}) {
   try {
     const r = await fetch(url, { ...opt, method, headers, credentials: 'same-origin' });
     const j = await r.json().catch(() => ({}));
-    if (!r.ok) throw httpError(j.error || 'Có lỗi xảy ra', r.status);
+    if (!r.ok) throw httpError(j.error || 'Có lỗi xảy ra', r.status, j);
     if (method === 'GET' && isCacheableGet(url)) await snapshotPut(url, j);
     return j;
   } catch (e) {
@@ -174,8 +174,11 @@ async function register() {
 }
 async function login() {
   if (!requireOnline('Đăng nhập')) return;
+  const payload={username:$('#user').value,password:$('#pass').value};
   try {
-    const j = await api('/api/login', { method: 'POST', body: JSON.stringify({ username: $('#user').value, password: $('#pass').value }) });
+    let j;
+    try { j=await api('/api/login',{method:'POST',body:JSON.stringify(payload)}); }
+    catch(e){ if(e.httpStatus===428&&e.data?.twoFactorRequired){const code=prompt('Nhập mã 2FA 6 số hoặc Recovery Code:','');if(!code)throw e;j=await api('/api/login',{method:'POST',body:JSON.stringify({...payload,totp:code})});} else throw e; }
     me = j.user; await snapshotPut('/api/me', { user: me }); show();
   } catch (e) { msg(e.message); }
 }
@@ -187,7 +190,7 @@ async function logout() {
 }
 
 function routeTo(route) {
-  const allowed = ['overview','profile','chat','team','notifications','friends','sync-center','avatar-tool','qr','pdf','tournament','banner','image-tool','music','security','admin'];
+  const allowed = ['overview','profile','chat','team','match','events','profile-card','notifications','friends','sync-center','avatar-tool','qr','pdf','tournament','banner','image-tool','music','security','admin'];
   if (!allowed.includes(route)) route = 'overview';
   if (route === 'admin' && !['Boss','Kì Cựu'].includes(me?.role)) route = 'overview';
   $$('.page-section').forEach(s => s.hidden = s.dataset.section !== route);
@@ -195,13 +198,16 @@ function routeTo(route) {
   history.replaceState(null, '', '#' + route);
   if (route === 'chat') { loadChat(); startChatTimer(); } else stopChatTimer();
   if (route === 'team') loadTeamPosts();
+  if (route === 'match') { if ($('#matchGame') && $('#teamGame')) $('#matchGame').value=$('#teamGame').value; }
+  if (route === 'events') loadEvents();
+  if (route === 'profile-card') drawProfileCard();
   if (route === 'notifications') { loadNotifications(); refreshPushStatus(); }
   if (route === 'friends') loadFriends();
   if (route === 'sync-center') renderSyncCenter();
-  if (route === 'security') loadSessions();
+  if (route === 'security') { loadSessions(); loadTwoFactorStatus(); }
   if (route === 'avatar-tool') drawRoleAvatar();
   if (route === 'banner') drawBanner();
-  if (route === 'admin' && isOnline()) { loadAdminReports(); loadBackups(); }
+  if (route === 'admin' && isOnline()) { loadAdminReports(); loadBackups(); loadAnalytics(); }
   if (route === 'admin' && !isOnline()) $('#users').innerHTML = '<p class="offline-note">🟠 Quản trị tài khoản cần mạng. Các công cụ khác vẫn dùng offline được.</p>';
 }
 let routesReady = false;
@@ -225,11 +231,15 @@ function runUiAction(action, el) {
     'render-admin-users': renderAdminUsers, 'sync-offline': () => syncOfflineQueue(true),
     'clear-offline': clearOfflineData, 'change-chat-room': changeChatRoom, 'create-team-post': createTeamPost, 'load-team-posts': loadTeamPosts, 'read-all-notifications': readAllNotifications, 'load-sessions': loadSessions, 'change-password': changePassword,
     'load-friends': loadFriends, 'render-friend-directory': renderFriendDirectory, 'send-dm': sendDM, 'refresh-sync-center': renderSyncCenter,
-    'enable-push': enablePush, 'disable-push': disablePush, 'load-admin-reports': loadAdminReports, 'load-backups': loadBackups
+    'enable-push': enablePush, 'disable-push': disablePush, 'load-admin-reports': loadAdminReports, 'load-backups': loadBackups,
+    'find-team-match': findTeamMatch, 'create-event': createEvent, 'draw-profile-card': drawProfileCard, 'search-chat': loadChat,
+    'setup-2fa': setupTwoFactor, 'confirm-2fa': confirmTwoFactor, 'disable-2fa': disableTwoFactor, 'load-analytics': loadAnalytics
   };
   if (action === 'download-canvas') return downloadCanvas(el.dataset.canvas, el.dataset.filename || 'download.png');
   if (action === 'rotate-image') return rotateImage(Number(el.dataset.deg) || 0);
   if (action === 'delete-chat') return deleteChat(el.dataset.id);
+  if (action === 'edit-chat') return editChat(el.dataset.id);
+  if (action === 'pin-chat') return pinChat(el.dataset.id);
   if (action === 'add-achievement') return addAchievement(el.dataset.id);
   if (action === 'ban-user') return ban(el.dataset.id, el.dataset.banned === 'true');
   if (action === 'set-role') return setRole(el.dataset.id, el.value);
@@ -238,6 +248,9 @@ function runUiAction(action, el) {
   if (action === 'react-chat') return reactChat(el.dataset.id, el.dataset.emoji);
   if (action === 'close-team-post') return closeTeamPost(el.dataset.id);
   if (action === 'delete-team-post') return deleteTeamPost(el.dataset.id);
+  if (action === 'event-join') return toggleEventJoin(el.dataset.id);
+  if (action === 'event-checkin') return checkinEvent(el.dataset.id);
+  if (action === 'event-delete') return deleteEvent(el.dataset.id);
   if (action === 'open-notification') return openNotification(el.dataset.id, el.dataset.route, el.dataset.room, el.dataset.dm);
   if (action === 'revoke-session') return revokeSession(el.dataset.id);
   if (action === 'friend-request') return requestFriend(el.dataset.id);
@@ -290,10 +303,16 @@ function renderProfile() {
   $('#profileJoinDate').textContent = `Tham gia: ${fmtDate(me.createdAt)}`;
   $('#newName').value = me.displayName || ''; $('#bio').value = me.bio || ''; $('#games').value = me.games || ''; $('#gameId').value = me.gameId || ''; $('#discord').value = me.discord || '';
   renderAchievements(me.achievements || []);
+  renderLevelBadges();
 }
 function renderAchievements(items) {
   $('#achievementCount').textContent = `${items.length} thành tích`;
   $('#achievementList').innerHTML = items.length ? items.map(a => `<article class="achievement"><div class="achievement-icon">${esc(a.icon || '🏆')}</div><div><b>${esc(a.title)}</b><p>${esc(a.description || '')}</p><small>Trao bởi ${esc(a.awardedBy || 'Hệ thống')} • ${fmtDate(a.awardedAt)}</small></div></article>`).join('') : '<p class="muted">Chưa có thành tích được trao.</p>';
+}
+function renderLevelBadges(){
+  if(!me)return; const xp=Number(me.xp||0),level=Number(me.level||1),base=(level-1)*(level-1)*100,next=level*level*100,pct=Math.max(0,Math.min(100,((xp-base)/Math.max(1,next-base))*100));
+  if($('#levelLabel'))$('#levelLabel').textContent=`Level ${level}`; if($('#xpLabel'))$('#xpLabel').textContent=`${xp} XP • còn ${Math.max(0,next-xp)} XP tới Level ${level+1}`; if($('#xpProgress'))$('#xpProgress').style.width=pct+'%';
+  if($('#badgeList'))$('#badgeList').innerHTML=(me.badges||[]).map(b=>`<span class="badge-chip" title="${esc(b.name)}">${esc(b.icon||'🏅')} ${esc(b.name)}</span>`).join('')||'<span class="muted">Chưa có huy hiệu XP.</span>';
 }
 async function show() {
   if (!me) {
@@ -302,6 +321,7 @@ async function show() {
   }
   $('#auth').hidden = true; $('#app').hidden = false;
   $('#adminNav').hidden = !['Boss','Kì Cựu'].includes(me.role);
+  if($('#eventAdminCard')) $('#eventAdminCard').hidden=!['Boss','Kì Cựu'].includes(me.role);
   renderProfile();
   await Promise.allSettled([members(), music(), adminUsers(), loadTeamPosts(), loadNotifications(), loadFriends()]);
   setupRoutes(); routeTo(location.hash.slice(1) || 'overview');
@@ -375,19 +395,25 @@ function startChatTimer() { stopChatTimer(); if (isOnline()) chatTimer = setInte
 async function loadChat() {
   if (!me) return;
   try {
-    const j = await api('/api/chat?room=' + encodeURIComponent(selectedChatRoom));
+    const q=$('#chatSearch')?.value?.trim()||'';
+    const j = await api('/api/chat?room=' + encodeURIComponent(selectedChatRoom) + (q?'&q='+encodeURIComponent(q):''));
     const queued = await window.OfflineDB?.listQueue?.() || [];
     const pending = queued.filter(x => x.type === 'chat' && (x.body?.room || 'general') === selectedChatRoom).map(x => ({ id: 'pending-' + x.id, clientId: x.body?.clientId, userId: me.id, username: me.username, displayName: me.displayName, role: me.role, avatar: me.avatar, room:selectedChatRoom, text: x.body?.text || '', replyTo:x.body?.replyTo || '', reactions:{}, createdAt: new Date(x.createdAt).toISOString(), mine: true, pending: true }));
-    const all = [...(j.messages || []), ...pending];
-    $('#chatMessages').innerHTML = all.map(m => { const reactions = Object.entries(m.reactions || {}).filter(([,ids]) => ids.length).map(([emoji,ids]) => `<button class="reaction ${ids.includes(me.id)?'mine':''}" data-action="react-chat" data-id="${m.id}" data-emoji="${emoji}" ${m.pending?'disabled':''}>${emoji} ${ids.length}</button>`).join(''); return `<div class="chat-message ${m.mine ? 'mine' : ''} ${m.pending ? 'pending' : ''}">${avatarHTML(m)}<div class="chat-bubble">${m.replyPreview ? `<div class="reply-preview">↪ ${esc(m.replyPreview.displayName)}: ${esc(m.replyPreview.text)}</div>`:''}<div class="chat-head"><b>${esc(m.displayName)}</b><span class="mini-role ${meta(m.role).key}">${meta(m.role).icon} ${esc(m.role)}</span><small>${m.pending ? '⏳ chờ đồng bộ' : fmtDate(m.createdAt)}</small></div><p>${esc(m.text)}</p><div class="chat-actions">${!m.pending?`<button class="tiny ghost" data-action="reply-chat" data-id="${m.id}">↩ Trả lời</button>${['👍','❤️','😂','🔥','🎮'].map(e=>`<button class="tiny ghost" data-action="react-chat" data-id="${m.id}" data-emoji="${e}">${e}</button>`).join('')}`:''}${!m.pending && !m.mine ? `<button class="tiny ghost" data-action="report-target" data-type="chat" data-id="${m.id}">🚩 Báo cáo</button>` : ''}${(m.mine || ['Boss','Kì Cựu'].includes(me.role)) && !m.pending ? `<button class="tiny danger" data-action="delete-chat" data-id="${m.id}">Xóa</button>` : ''}</div><div class="reactions">${reactions}</div></div></div>`; }).join('') || '<p class="muted">Chưa có tin nhắn.</p>';
+    const renderOne=m=>{const reactions=Object.entries(m.reactions||{}).filter(([,ids])=>ids.length).map(([emoji,ids])=>`<button class="reaction ${ids.includes(me.id)?'mine':''}" data-action="react-chat" data-id="${m.id}" data-emoji="${emoji}" ${m.pending?'disabled':''}>${emoji} ${ids.length}</button>`).join('');return `<div class="chat-message ${m.mine?'mine':''} ${m.pending?'pending':''} ${m.pinned?'pinned':''}">${avatarHTML(m)}<div class="chat-bubble">${m.pinned?'<div class="pinned-label">📌 Tin đã ghim</div>':''}${m.replyPreview?`<div class="reply-preview">↪ ${esc(m.replyPreview.displayName)}: ${esc(m.replyPreview.text)}</div>`:''}<div class="chat-head"><b>${esc(m.displayName)}</b><span class="mini-role ${meta(m.role).key}">${meta(m.role).icon} ${esc(m.role)}</span><small>${m.pending?'⏳ chờ đồng bộ':fmtDate(m.createdAt)}${m.editedAt?' • đã sửa':''}</small></div>${m.text?`<p>${esc(m.text)}</p>`:''}${m.attachmentUrl?`<a href="${esc(m.attachmentUrl)}" target="_blank"><img class="chat-image" src="${esc(m.attachmentUrl)}" alt="Ảnh chat"></a>`:''}<div class="chat-actions">${!m.pending?`<button class="tiny ghost" data-action="reply-chat" data-id="${m.id}">↩ Trả lời</button>${['👍','❤️','😂','🔥','🎮'].map(e=>`<button class="tiny ghost" data-action="react-chat" data-id="${m.id}" data-emoji="${e}">${e}</button>`).join('')}`:''}${m.mine&&!m.pending?`<button class="tiny ghost" data-action="edit-chat" data-id="${m.id}">✏️ Sửa</button>`:''}${['Boss','Kì Cựu'].includes(me.role)&&!m.pending?`<button class="tiny ghost" data-action="pin-chat" data-id="${m.id}">${m.pinned?'📌 Bỏ ghim':'📌 Ghim'}</button>`:''}${!m.pending&&!m.mine?`<button class="tiny ghost" data-action="report-target" data-type="chat" data-id="${m.id}">🚩 Báo cáo</button>`:''}${(m.mine||['Boss','Kì Cựu'].includes(me.role))&&!m.pending?`<button class="tiny danger" data-action="delete-chat" data-id="${m.id}">Xóa</button>`:''}</div><div class="reactions">${reactions}</div></div></div>`;};
+    const all=[...(j.messages||[]),...pending]; $('#chatMessages').innerHTML=all.map(renderOne).join('')||'<p class="muted">Chưa có tin nhắn.</p>';
+    if($('#pinnedMessages')) $('#pinnedMessages').innerHTML=(j.pinned||[]).length?`<b>📌 Đã ghim trong phòng</b>${(j.pinned||[]).map(m=>`<button class="pinned-chip" data-action="reply-chat" data-id="${m.id}">${esc(m.displayName)}: ${esc((m.text||'[ảnh]').slice(0,60))}</button>`).join('')}`:'';
     const box=$('#chatMessages'); box.scrollTop=box.scrollHeight;
   } catch (e) { $('#chatMessages').innerHTML = `<p class="offline-note">${esc(e.message)}</p>`; }
 }
 async function sendChat() {
-  const input=$('#chatInput'); const text=input.value.trim(); if(!text)return;
-  const body={ text, clientId:uid(), room:selectedChatRoom, replyTo:replyingTo?.id || '' };
-  try { const j=await api('/api/chat',{method:'POST',body:JSON.stringify(body),queueIfOffline:'chat'}); input.value=''; setChatReply(''); await loadChat(); if(j.queued) await updateOfflineStatus(); } catch(e){ alert(e.message); }
+  const input=$('#chatInput'); const text=input.value.trim(); const image=$('#chatImage')?.files?.[0]; if(!text&&!image)return;
+  let attachmentUrl='';
+  if(image){ if(!isOnline())return alert('Gửi ảnh chat cần mạng. Tin văn bản vẫn có thể gửi offline.'); const fd=new FormData();fd.append('image',image);const r=await fetch('/api/chat/upload',{method:'POST',body:fd,credentials:'same-origin'});const j=await r.json().catch(()=>({}));if(!r.ok)return alert(j.error||'Không thể tải ảnh');attachmentUrl=j.url||''; }
+  const body={ text, attachmentUrl, clientId:uid(), room:selectedChatRoom, replyTo:replyingTo?.id || '' };
+  try { const j=await api('/api/chat',{method:'POST',body:JSON.stringify(body),queueIfOffline:'chat'}); input.value=''; if($('#chatImage'))$('#chatImage').value=''; setChatReply(''); await loadChat(); if(j.queued) await updateOfflineStatus(); try{me=(await api('/api/me')).user;renderProfile();}catch{} } catch(e){ alert(e.message); }
 }
+async function editChat(id){if(!requireOnline('Sửa tin nhắn'))return;const current=$(`[data-action="edit-chat"][data-id="${CSS.escape(id)}"]`)?.closest('.chat-bubble')?.querySelector('p')?.textContent||'';const text=prompt('Sửa tin nhắn:',current);if(text==null||!text.trim())return;try{await api('/api/chat/'+id,{method:'PATCH',body:JSON.stringify({text})});await loadChat();}catch(e){alert(e.message)}}
+async function pinChat(id){if(!requireOnline('Ghim tin nhắn'))return;try{await api(`/api/chat/${id}/pin`,{method:'POST',body:'{}'});await loadChat();}catch(e){alert(e.message)}}
 async function deleteChat(id) {
   if (!requireOnline('Xóa tin nhắn')) return;
   try { await api('/api/chat/' + id, { method: 'DELETE' }); loadChat(); } catch (e) { alert(e.message); }
@@ -406,6 +432,21 @@ async function loadTeamPosts() { if(!me)return; try { const j=await api('/api/te
 async function createTeamPost(){ const body={clientId:uid(),game:$('#teamGame').value,mode:$('#teamMode').value,server:$('#teamServer').value,playTime:$('#teamTime').value,slots:Number($('#teamSlots').value)||1,expireHours:Number($('#teamExpire').value)||24,note:$('#teamNote').value}; try{const j=await api('/api/team-posts',{method:'POST',body:JSON.stringify(body),queueIfOffline:'team'}); $('#teamNote').value=''; await loadTeamPosts(); if(j.queued) alert('Đã lưu bài vào hàng đợi. Khi có mạng sẽ tự đăng.');}catch(e){alert(e.message);} }
 async function closeTeamPost(id){if(!requireOnline('Đổi trạng thái bài tìm đồng đội'))return;try{await api(`/api/team-posts/${id}/close`,{method:'POST'});loadTeamPosts();}catch(e){alert(e.message)}}
 async function deleteTeamPost(id){if(!requireOnline('Xóa bài tìm đồng đội'))return;if(!confirm('Xóa bài này?'))return;try{await api(`/api/team-posts/${id}`,{method:'DELETE'});loadTeamPosts();}catch(e){alert(e.message)}}
+
+
+async function findTeamMatch(){if(!requireOnline('Ghép đồng đội tự động'))return;try{const j=await api('/api/team-match',{method:'POST',body:JSON.stringify({game:$('#matchGame').value,mode:$('#matchMode').value,server:$('#matchServer').value,playTime:$('#matchTime').value})});const a=j.matches||[];$('#matchCount').textContent=`${a.length} kết quả`;$('#matchResults').innerHTML=a.map(p=>`<article class="team-post"><div class="match-score">${p.score}%</div>${avatarHTML(p)}<div class="team-main"><b>${esc(p.displayName)}</b><h3>${esc(p.game)} ${p.mode?`• ${esc(p.mode)}`:''}</h3><p>${esc((p.reasons||[]).join(' • '))}</p><p>${p.server?`🌐 ${esc(p.server)} • `:''}${p.playTime?`🕒 ${esc(p.playTime)} • `:''}👥 Cần ${p.slots}</p><p>${esc(p.note||'')}</p></div></article>`).join('')||'<p class="muted">Chưa tìm thấy bài phù hợp. Thử nới tiêu chí.</p>';}catch(e){alert(e.message)}}
+async function loadEvents(){if(!me)return;try{const j=await api('/api/events');const a=j.events||[];$('#eventList').innerHTML=a.map(e=>`<article class="event-card"><div><span class="status-pill">${e.checkedIn?'✅ Đã check-in':e.joined?'🟢 Đã đăng ký':'⚪ Chưa đăng ký'}</span><h3>${esc(e.title)}</h3><p>${esc(e.description||'')}</p><p>🕒 ${fmtDate(e.startAt)}${e.endAt?` → ${fmtDate(e.endAt)}`:''}</p><small>👥 ${(e.participants||[]).length} đăng ký • tạo bởi ${esc(e.createdBy)}</small>${e.checkinCode?`<p class="admin-code">Mã check-in: <b>${esc(e.checkinCode)}</b></p>`:''}</div><div class="event-actions"><button class="tiny" data-action="event-join" data-id="${e.id}">${e.joined?'Hủy đăng ký':'Tham gia'}</button>${e.joined&&!e.checkedIn?`<button class="tiny ghost" data-action="event-checkin" data-id="${e.id}">🎟️ Check-in</button>`:''}${['Boss','Kì Cựu'].includes(me.role)?`<button class="tiny danger" data-action="event-delete" data-id="${e.id}">Xóa</button>`:''}</div></article>`).join('')||'<p class="muted">Chưa có sự kiện.</p>';}catch(e){$('#eventList').innerHTML=`<p class="offline-note">${esc(e.message)}</p>`;}}
+async function createEvent(){if(!requireOnline('Tạo sự kiện'))return;try{await api('/api/events',{method:'POST',body:JSON.stringify({title:$('#eventTitle').value,description:$('#eventDescription').value,startAt:$('#eventStart').value,endAt:$('#eventEnd').value})});$('#eventTitle').value=$('#eventDescription').value='';await loadEvents();}catch(e){alert(e.message)}}
+async function toggleEventJoin(id){if(!requireOnline('Đăng ký sự kiện'))return;try{await api(`/api/events/${id}/join`,{method:'POST',body:'{}'});me=(await api('/api/me')).user;renderProfile();await loadEvents();}catch(e){alert(e.message)}}
+async function checkinEvent(id){if(!requireOnline('Check-in sự kiện'))return;const code=prompt('Nhập mã check-in sự kiện:','');if(!code)return;try{await api(`/api/events/${id}/checkin`,{method:'POST',body:JSON.stringify({code})});me=(await api('/api/me')).user;renderProfile();await loadEvents();alert('Check-in thành công +25 XP.');}catch(e){alert(e.message)}}
+async function deleteEvent(id){if(!requireOnline('Xóa sự kiện'))return;if(!confirm('Xóa sự kiện này?'))return;try{await api(`/api/events/${id}`,{method:'DELETE'});await loadEvents();}catch(e){alert(e.message)}}
+function roundedRect(ctx,x,y,w,h,r){ctx.beginPath();ctx.roundRect?ctx.roundRect(x,y,w,h,r):(ctx.rect(x,y,w,h));ctx.fill();}
+async function drawProfileCard(){const c=$('#profileCardCanvas');if(!c||!me)return;const ctx=c.getContext('2d');ctx.clearRect(0,0,c.width,c.height);const g=ctx.createLinearGradient(0,0,c.width,c.height);g.addColorStop(0,'#07111f');g.addColorStop(.55,'#0a3b66');g.addColorStop(1,'#32105e');ctx.fillStyle=g;ctx.fillRect(0,0,c.width,c.height);ctx.strokeStyle='#39b9ff';ctx.lineWidth=5;ctx.strokeRect(20,20,c.width-40,c.height-40);ctx.fillStyle='#fff';ctx.font='bold 48px Segoe UI';ctx.fillText('GiaTộc ┊Name Hub',360,90);ctx.font='bold 56px Segoe UI';ctx.fillText(me.displayName||me.username,360,180);ctx.fillStyle='#7fffe3';ctx.font='bold 28px Segoe UI';ctx.fillText(`${meta(me.role).icon} ${me.role}   •   Level ${me.level||1}   •   ${me.xp||0} XP`,360,230);ctx.fillStyle='#dce9f6';ctx.font='26px Segoe UI';ctx.fillText(`🎮 ${me.games||'Chưa cập nhật game'}`,360,285);ctx.fillText(`🏆 ${(me.achievements||[]).length} thành tích`,360,330);ctx.font='22px Segoe UI';ctx.fillStyle='#b9d7ef';ctx.fillText((me.badges||[]).slice(0,4).map(b=>`${b.icon} ${b.name}`).join('   ')||'🌱 Hoàn thành hoạt động để mở huy hiệu',360,380);try{const img=new Image();img.crossOrigin='anonymous';img.src=avatarOf(me);await img.decode();ctx.save();ctx.beginPath();ctx.arc(190,240,125,0,Math.PI*2);ctx.clip();ctx.drawImage(img,65,115,250,250);ctx.restore();ctx.strokeStyle=meta(me.role).c1;ctx.lineWidth=10;ctx.beginPath();ctx.arc(190,240,130,0,Math.PI*2);ctx.stroke();}catch{}try{const tmp=document.createElement('canvas');await window.QRCode.toCanvas(tmp,$('#profileCardUrl').value||location.origin,{width:180,margin:1});ctx.fillStyle='#fff';ctx.fillRect(930,390,200,200);ctx.drawImage(tmp,940,400,180,180);}catch{}ctx.fillStyle='#72d3ff';ctx.font='22px Segoe UI';ctx.fillText('Quét QR để mở GiaTộc ┊Name Hub',705,605);}
+async function loadTwoFactorStatus(){const st=$('#twoFactorStatus');if(!st||!me||!isOnline()){if(st)st.textContent='Cần mạng';return;}try{const j=await api('/api/security/2fa/status');st.textContent=j.enabled?'🟢 Đã bật':'⚪ Chưa bật';}catch(e){st.textContent='Không xác định';}}
+async function setupTwoFactor(){if(!requireOnline('Thiết lập 2FA'))return;try{const j=await api('/api/security/2fa/setup',{method:'POST',body:'{}'});$('#twoFactorSetup').hidden=false;$('#twoFactorSecret').textContent=j.secret;await window.QRCode.toDataURL(j.uri,{width:260,margin:2}).then(url=>$('#twoFactorQr').src=url);}catch(e){alert(e.message)}}
+async function confirmTwoFactor(){const code=$('#twoFactorCode').value.trim();if(!code)return;try{const j=await api('/api/security/2fa/confirm',{method:'POST',body:JSON.stringify({code})});$('#twoFactorSetup').hidden=true;$('#recoveryCodes').innerHTML=`<h3>🔑 Recovery Codes — lưu ở nơi an toàn</h3><div class="codes-grid">${(j.recoveryCodes||[]).map(c=>`<code>${esc(c)}</code>`).join('')}</div><p class="muted">Mỗi mã chỉ dùng được một lần.</p>`;await loadTwoFactorStatus();me=(await api('/api/me')).user;}catch(e){alert(e.message)}}
+async function disableTwoFactor(){if(!requireOnline('Tắt 2FA'))return;const password=prompt('Nhập mật khẩu hiện tại để tắt 2FA:','');if(!password)return;try{await api('/api/security/2fa/disable',{method:'POST',body:JSON.stringify({password})});$('#recoveryCodes').innerHTML='';await loadTwoFactorStatus();me=(await api('/api/me')).user;alert('Đã tắt 2FA.');}catch(e){alert(e.message)}}
+async function loadAnalytics(){if(!me||!['Boss','Kì Cựu'].includes(me.role)||!isOnline()||!$('#analyticsGrid'))return;try{const j=await api('/api/admin/analytics');const rows=[['👥 Thành viên',j.users],['🟢 Online',j.online5m],['💬 Chat 24h',j.chat24h],['🤝 Bài tìm đội',j.teamOpen],['📅 Sự kiện',j.events],['🚩 Báo cáo mở',j.reportsOpen],['💾 Backup',j.backups],['🗂️ Storage',(j.storageBytes/1024/1024).toFixed(1)+' MB']];$('#analyticsGrid').innerHTML=rows.map(([k,v])=>`<div class="metric"><b>${k}</b><strong>${esc(v)}</strong></div>`).join('');$('#analyticsTopXp').innerHTML=`<h4>🏆 Top XP</h4>${(j.topXp||[]).map((u,i)=>`<div class="top-xp"><span>#${i+1} ${esc(u.displayName)}</span><b>Lv.${u.level} • ${u.xp} XP</b></div>`).join('')}`;}catch(e){$('#analyticsGrid').innerHTML=`<p class="offline-note">${esc(e.message)}</p>`;}}
 
 async function loadNotifications(){ if(!me)return; try{const j=await api('/api/notifications'); const badge=$('#notificationBadge'); if(badge){badge.hidden=!j.unread;badge.textContent=j.unread||0;} const icon=n=>n.type==='achievement'?'🏆':n.type==='mention'?'@':n.type==='reply'?'↩️':n.type==='role'?'👑':n.type==='friend'?'👥':n.type==='dm'?'💬':n.type==='moderation'?'🛡️':'🔔'; $('#notificationList').innerHTML=(j.notifications||[]).map(n=>`<article class="notification-item ${n.read?'read':'unread'}" data-action="open-notification" data-id="${n.id}" data-route="${esc(n.route||'')}" data-room="${esc(n.room||'')}" data-dm="${esc(n.dmUserId||'')}"><div class="notification-icon">${icon(n)}</div><div><b>${esc(n.title)}</b><p>${esc(n.message)}</p><small>${fmtDate(n.createdAt)}</small></div></article>`).join('')||'<p class="muted">Chưa có thông báo.</p>'; }catch(e){$('#notificationList').innerHTML=`<p class="offline-note">${esc(e.message)}</p>`;} }
 async function readAllNotifications(){if(!requireOnline('Đánh dấu thông báo'))return;await api('/api/notifications/read',{method:'POST',body:'{}'});loadNotifications();}
@@ -582,5 +623,5 @@ window.addEventListener('error', event => console.error('UI error:', event.error
 window.addEventListener('unhandledrejection', event => console.error('Promise error:', event.reason));
 setupInteractions();
 if (location.protocol === 'file:') msg('⚠️ Không mở index.html trực tiếp. Hãy chạy npm install → npm start rồi mở http://localhost:3000');
-window.addEventListener('load', () => { drawRoleAvatar(); drawBanner(); updateOfflineStatus(); });
+window.addEventListener('load', () => { drawRoleAvatar(); drawBanner(); updateOfflineStatus(); setTimeout(()=>drawProfileCard().catch?.(()=>{}),200); });
 show();

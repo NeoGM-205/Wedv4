@@ -5,7 +5,7 @@ const installBtn = document.getElementById('installAppBtn');
 async function registerSW() {
   if (!('serviceWorker' in navigator)) return null;
   try {
-    const registration = await navigator.serviceWorker.register('/sw.js?v=1.5.0', { updateViaCache: 'none' });
+    const registration = await navigator.serviceWorker.register('/sw.js?v=1.6.0', { updateViaCache: 'none' });
     swRegistration = registration;
     await registration.update();
     return registration;
@@ -33,8 +33,8 @@ if ('serviceWorker' in navigator) {
   });
 
   navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (sessionStorage.getItem('sw-reloaded-v1.5.0')) return;
-    sessionStorage.setItem('sw-reloaded-v1.5.0', '1');
+    if (sessionStorage.getItem('sw-reloaded-v1.6.0')) return;
+    sessionStorage.setItem('sw-reloaded-v1.6.0', '1');
     location.reload();
   });
 

@@ -163,12 +163,12 @@ function migrateDirectoryOnce(sourceDir, targetDir) {
 }
 migrateDirectoryOnce(path.join(__dirname, 'public', 'uploads'), uploadDir);
 migrateDirectoryOnce(path.join(__dirname, 'backups'), backupDir);
-const defaultDb = { users: [], music: [], logs: [], chat: [], notifications: [], teamPosts: [], friendRequests: [], directMessages: [], reports: [], pushSubscriptions: [] };
+const defaultDb = { users: [], music: [], logs: [], chat: [], notifications: [], teamPosts: [], friendRequests: [], directMessages: [], reports: [], pushSubscriptions: [], events: [] };
 const normalizeDb = db => ({
   ...defaultDb, ...(db || {}),
   users: db?.users || [], music: db?.music || [], logs: db?.logs || [], chat: db?.chat || [],
   notifications: db?.notifications || [], teamPosts: db?.teamPosts || [], friendRequests: db?.friendRequests || [],
-  directMessages: db?.directMessages || [], reports: db?.reports || [], pushSubscriptions: db?.pushSubscriptions || []
+  directMessages: db?.directMessages || [], reports: db?.reports || [], pushSubscriptions: db?.pushSubscriptions || [], events: db?.events || []
 });
 const load = () => { try { return normalizeDb(JSON.parse(fs.readFileSync(dbPath, 'utf8'))); } catch { return structuredClone(defaultDb); } };
 const save = db => fs.writeFileSync(dbPath, JSON.stringify(normalizeDb(db), null, 2));
@@ -228,9 +228,40 @@ function safeUser(u) {
     achievements: Array.isArray(u.achievements) ? u.achievements : [],
     profileUpdatedAt: u.profileUpdatedAt || u.createdAt || null,
     muteUntil: u.muteUntil || null,
-    muteReason: u.muteReason || ''
+    muteReason: u.muteReason || '',
+    xp: Number(u.xp || 0),
+    level: levelFromXp(Number(u.xp || 0)),
+    badges: Array.isArray(u.badges) ? u.badges : [],
+    twoFactorEnabled: !!u.twoFactorEnabled
   };
 }
+
+function levelFromXp(xp) { return Math.max(1, Math.floor(Math.sqrt(Math.max(0, xp) / 100)) + 1); }
+const BADGE_RULES = [
+  { id:'starter', icon:'🌱', name:'Khởi đầu', xp:25 },
+  { id:'active', icon:'⚡', name:'Thành viên năng động', xp:150 },
+  { id:'veteran', icon:'🏅', name:'Cống hiến', xp:500 },
+  { id:'legend', icon:'👑', name:'Huyền thoại cộng đồng', xp:1200 }
+];
+function syncBadges(user) {
+  user.badges = Array.isArray(user.badges) ? user.badges : [];
+  for (const rule of BADGE_RULES) if ((user.xp || 0) >= rule.xp && !user.badges.some(b => b.id === rule.id)) user.badges.push({ ...rule, awardedAt:new Date().toISOString() });
+}
+function addXp(user, amount, reason, cooldownMs = 0) {
+  user.xpMeta = user.xpMeta || {};
+  const now = Date.now(); const last = Number(user.xpMeta[reason] || 0);
+  if (cooldownMs && now - last < cooldownMs) return 0;
+  const add = Math.max(0, Math.min(100, Number(amount) || 0));
+  user.xp = Number(user.xp || 0) + add; user.xpMeta[reason] = now; syncBadges(user); return add;
+}
+const BASE32='ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+function randomBase32(len=32){ const bytes=crypto.randomBytes(len); let out=''; for(let i=0;i<len;i++) out+=BASE32[bytes[i]%32]; return out; }
+function base32Decode(input){ const clean=String(input||'').toUpperCase().replace(/[^A-Z2-7]/g,''); let bits=''; for(const c of clean) bits+=BASE32.indexOf(c).toString(2).padStart(5,'0'); const arr=[]; for(let i=0;i+8<=bits.length;i+=8) arr.push(parseInt(bits.slice(i,i+8),2)); return Buffer.from(arr); }
+function hotp(secret,counter){ const key=base32Decode(secret); const buf=Buffer.alloc(8); buf.writeBigUInt64BE(BigInt(counter)); const h=crypto.createHmac('sha1',key).update(buf).digest(); const off=h[h.length-1]&15; const n=(h.readUInt32BE(off)&0x7fffffff)%1000000; return String(n).padStart(6,'0'); }
+function verifyTotp(secret, code){ const clean=String(code||'').replace(/\s/g,''); if(!/^\d{6}$/.test(clean)) return false; const ctr=Math.floor(Date.now()/30000); return [-1,0,1].some(w=>hotp(secret,ctr+w)===clean); }
+function makeRecoveryCodes(){ return Array.from({length:8},()=>crypto.randomBytes(4).toString('hex').toUpperCase()); }
+function hashRecovery(code){ return crypto.createHash('sha256').update(String(code).trim().toUpperCase()).digest('hex'); }
+
 function auth(req, res, next) {
   const db = load();
   const u = db.users.find(x => x.id === req.session.uid);
@@ -294,7 +325,7 @@ async function sendPushToUser(userId, payload = {}) {
 
 app.get('/api/health', (req, res) => res.json({
   ok: true,
-  version: '1.5.0',
+  version: '1.6.0',
   storage: { root: storageRoot, data: dataDir, uploads: uploadDir, backups: backupDir }
 }));
 
@@ -308,7 +339,7 @@ app.post('/api/register', async (req, res) => {
   const first = db.users.length === 0;
   const u = {
     id: crypto.randomUUID(), username, displayName, passwordHash: await bcrypt.hash(password, 12), role: first ? 'Boss' : 'Member', avatar: '', banned: false,
-    bio: '', games: '', gameId: '', discord: '', achievements: [], muteUntil: null, muteReason: '', createdAt: new Date().toISOString(), profileUpdatedAt: new Date().toISOString(), lastSeen: new Date().toISOString()
+    bio: '', games: '', gameId: '', discord: '', achievements: [], badges: [], xp: 0, xpMeta: {}, twoFactorEnabled: false, twoFactorSecret: '', twoFactorPendingSecret: '', recoveryCodeHashes: [], muteUntil: null, muteReason: '', createdAt: new Date().toISOString(), profileUpdatedAt: new Date().toISOString(), lastSeen: new Date().toISOString()
   };
   db.users.push(u);
   addLog(db, 'register', { user: u.username });
@@ -325,7 +356,16 @@ app.post('/api/login', loginLimiter, async (req, res) => {
   const u = db.users.find(x => x.username.toLowerCase() === username.toLowerCase());
   if (!u || !await bcrypt.compare(password, u.passwordHash)) return res.status(401).json({ error: 'Sai tài khoản hoặc mật khẩu' });
   if (u.banned) return res.status(403).json({ error: 'Tài khoản đã bị cấm' });
-  u.lastSeen = new Date().toISOString();
+  if (u.twoFactorEnabled) {
+    const code = String(req.body.totp || '').trim();
+    let accepted = verifyTotp(u.twoFactorSecret, code);
+    if (!accepted && code) {
+      const h = hashRecovery(code); const idx=(u.recoveryCodeHashes||[]).indexOf(h);
+      if (idx >= 0) { accepted=true; u.recoveryCodeHashes.splice(idx,1); }
+    }
+    if (!accepted) return res.status(428).json({ error:'Cần mã xác thực 2 bước', twoFactorRequired:true });
+  }
+  u.lastSeen = new Date().toISOString(); addXp(u, 2, 'daily_login', 20*60*60*1000);
   save(db);
   req.session.uid = u.id;
   req.session.meta = { ...requestMeta(req), createdAt: new Date().toISOString() };
@@ -385,8 +425,12 @@ app.post('/api/music', auth, (req, res) => {
 app.get('/api/chat', auth, (req, res) => {
   const db = load();
   const room = cleanText(req.query.room || 'general', 40) || 'general';
-  const messages = db.chat.filter(m => (m.room || 'general') === room).slice(-150).map(m => ({ ...m, mine: m.userId === req.user.id }));
-  res.json({ room, messages });
+  const q = cleanText(req.query.q || '', 80).toLowerCase();
+  let rows = db.chat.filter(m => (m.room || 'general') === room);
+  if (q) rows = rows.filter(m => String(m.text||'').toLowerCase().includes(q) || String(m.displayName||'').toLowerCase().includes(q));
+  const messages = rows.slice(-150).map(m => ({ ...m, mine: m.userId === req.user.id }));
+  const pinned = db.chat.filter(m => (m.room || 'general') === room && m.pinned).slice(-10).map(m => ({...m,mine:m.userId===req.user.id}));
+  res.json({ room, messages, pinned });
 });
 app.post('/api/chat', auth, chatLimiter, (req, res) => {
   if (!ensureCanCommunicate(req.user, res)) return;
@@ -394,14 +438,15 @@ app.post('/api/chat', auth, chatLimiter, (req, res) => {
   const clientId = cleanText(req.body.clientId, 100);
   const room = cleanText(req.body.room || 'general', 40) || 'general';
   const replyTo = cleanText(req.body.replyTo, 80);
-  if (!text) return res.status(400).json({ error: 'Tin nhắn trống' });
+  const attachmentUrl = cleanText(req.body.attachmentUrl, 300);
+  if (!text && !attachmentUrl) return res.status(400).json({ error: 'Tin nhắn trống' });
   const db = load();
   if (clientId) {
     const existing = db.chat.find(m => m.userId === req.user.id && m.clientId === clientId);
     if (existing) return res.json({ message: existing, deduplicated: true });
   }
   const replied = replyTo ? db.chat.find(m => m.id === replyTo && (m.room || 'general') === room) : null;
-  const message = { id: crypto.randomUUID(), clientId: clientId || '', userId: req.user.id, username: req.user.username, displayName: req.user.displayName, role: req.user.role, avatar: req.user.avatar || '', room, text, replyTo: replied ? replied.id : '', replyPreview: replied ? { displayName: replied.displayName, text: replied.text.slice(0, 100) } : null, reactions: {}, createdAt: new Date().toISOString() };
+  const message = { id: crypto.randomUUID(), clientId: clientId || '', userId: req.user.id, username: req.user.username, displayName: req.user.displayName, role: req.user.role, avatar: req.user.avatar || '', room, text, attachmentUrl, editedAt:'', pinned:false, pinnedBy:'', replyTo: replied ? replied.id : '', replyPreview: replied ? { displayName: replied.displayName, text: replied.text.slice(0, 100) } : null, reactions: {}, createdAt: new Date().toISOString() };
   db.chat.push(message);
   if (db.chat.length > 800) db.chat = db.chat.slice(-800);
   const mentioned = [...new Set((text.match(/@[a-zA-Z0-9_.-]{3,30}/g) || []).map(x => x.slice(1).toLowerCase()))];
@@ -409,10 +454,30 @@ app.post('/api/chat', auth, chatLimiter, (req, res) => {
     const target = db.users.find(u => u.username.toLowerCase() === username && u.id !== req.user.id);
     if (target) notifyUser(db, target.id, 'mention', 'Bạn được nhắc trong trò chuyện', `${req.user.displayName}: ${text.slice(0, 140)}`, { route: 'chat', room });
   }
+  addXp(db.users.find(u=>u.id===req.user.id), 3, 'chat_xp', 60*1000);
   if (replied && replied.userId !== req.user.id) notifyUser(db, replied.userId, 'reply', 'Có người trả lời tin nhắn của bạn', `${req.user.displayName}: ${text.slice(0, 140)}`, { route: 'chat', room });
   save(db);
   res.json({ message });
 });
+
+const chatImageUpload = multer({ storage: diskStorage, limits:{fileSize:3*1024*1024}, fileFilter:(req,file,cb)=>cb(null,/^image\/(png|jpeg|webp|gif)$/.test(file.mimetype)) });
+app.post('/api/chat/upload', auth, chatImageUpload.single('image'), (req,res)=>{
+  if (!ensureCanCommunicate(req.user,res)) return;
+  if(!req.file) return res.status(400).json({error:'Chỉ hỗ trợ ảnh PNG/JPG/WebP/GIF tối đa 3MB'});
+  res.json({url:'/uploads/'+req.file.filename});
+});
+app.patch('/api/chat/:id', auth, (req,res)=>{
+  const text=cleanText(req.body.text,500); if(!text) return res.status(400).json({error:'Tin nhắn trống'});
+  const db=load(); const m=db.chat.find(x=>x.id===req.params.id); if(!m) return res.status(404).json({error:'Không tìm thấy tin nhắn'});
+  if(m.userId!==req.user.id) return res.status(403).json({error:'Chỉ được sửa tin nhắn của bạn'});
+  if(Date.now()-new Date(m.createdAt).getTime()>30*60*1000) return res.status(400).json({error:'Chỉ sửa được tin trong 30 phút'});
+  m.text=text; m.editedAt=new Date().toISOString(); save(db); res.json({message:m});
+});
+app.post('/api/chat/:id/pin', auth, admin, (req,res)=>{
+  const db=load(); const m=db.chat.find(x=>x.id===req.params.id); if(!m) return res.status(404).json({error:'Không tìm thấy tin nhắn'});
+  m.pinned=!m.pinned; m.pinnedBy=m.pinned?req.user.username:''; addLog(db,m.pinned?'chat_pin':'chat_unpin',{by:req.user.username,message:m.id}); save(db); res.json({message:m});
+});
+
 app.post('/api/chat/:id/reaction', auth, (req, res) => {
   const emoji = cleanText(req.body.emoji, 8);
   if (!['👍','❤️','😂','🔥','🎮'].includes(emoji)) return res.status(400).json({ error: 'Reaction không hợp lệ' });
@@ -628,7 +693,7 @@ app.post('/api/team-posts', auth, (req, res) => {
   const hours = Math.max(1, Math.min(168, Number(req.body.expireHours) || 24));
   if (!game) return res.status(400).json({ error: 'Chưa chọn game' });
   const post = { id: crypto.randomUUID(), clientId, userId: req.user.id, username: req.user.username, displayName: req.user.displayName, role: req.user.role, avatar: req.user.avatar || '', game, mode, server, playTime, slots, note, status: 'open', createdAt: new Date().toISOString(), expiresAt: new Date(Date.now()+hours*3600000).toISOString() };
-  db.teamPosts.push(post); if (db.teamPosts.length > 500) db.teamPosts = db.teamPosts.slice(-500); save(db); res.json({ post });
+  db.teamPosts.push(post); if (db.teamPosts.length > 500) db.teamPosts = db.teamPosts.slice(-500); addXp(db.users.find(u=>u.id===req.user.id), 8, 'team_post', 6*60*60*1000); save(db); res.json({ post });
 });
 app.post('/api/team-posts/:id/close', auth, (req, res) => {
   const db = load(); const p = db.teamPosts.find(x => x.id === req.params.id); if (!p) return res.status(404).json({ error: 'Không tìm thấy bài' });
@@ -639,6 +704,42 @@ app.delete('/api/team-posts/:id', auth, (req, res) => {
   const db = load(); const i = db.teamPosts.findIndex(x => x.id === req.params.id); if (i<0) return res.status(404).json({ error: 'Không tìm thấy bài' });
   const p=db.teamPosts[i]; if (p.userId !== req.user.id && !['Boss','Kì Cựu'].includes(req.user.role)) return res.status(403).json({ error: 'Không đủ quyền' });
   db.teamPosts.splice(i,1); save(db); res.json({ ok:true });
+});
+
+
+// ===== v1.6 Auto Match, Events, XP/Badges, Analytics =====
+app.post('/api/team-match', auth, (req,res)=>{
+  const db=load(); const game=cleanText(req.body.game,60).toLowerCase(), mode=cleanText(req.body.mode,80).toLowerCase(), server=cleanText(req.body.server,80).toLowerCase(), playTime=cleanText(req.body.playTime,80).toLowerCase();
+  const now=Date.now();
+  const matches=db.teamPosts.filter(p=>p.userId!==req.user.id && p.status==='open' && (!p.expiresAt || new Date(p.expiresAt).getTime()>now)).map(p=>{
+    let score=0; const reasons=[];
+    if(game && p.game?.toLowerCase()===game){score+=55;reasons.push('Cùng game');}
+    if(mode && p.mode?.toLowerCase().includes(mode)){score+=20;reasons.push('Cùng chế độ');}
+    if(server && p.server?.toLowerCase().includes(server)){score+=15;reasons.push('Cùng server/khu vực');}
+    if(playTime && p.playTime?.toLowerCase().includes(playTime)){score+=10;reasons.push('Khớp giờ chơi');}
+    return {...p,score,reasons};
+  }).filter(x=>x.score>0).sort((a,b)=>b.score-a.score).slice(0,12);
+  res.json({matches});
+});
+app.get('/api/events', auth, (req,res)=>{
+  const db=load(); const events=(db.events||[]).slice().sort((a,b)=>new Date(a.startAt)-new Date(b.startAt)).map(e=>({...e,joined:(e.participants||[]).includes(req.user.id),checkedIn:(e.checkedIn||[]).includes(req.user.id),checkinCode:['Boss','Kì Cựu'].includes(req.user.role)?e.checkinCode:undefined})); res.json({events});
+});
+app.post('/api/events', auth, admin, (req,res)=>{
+  const title=cleanText(req.body.title,100), description=cleanText(req.body.description,500), startAt=String(req.body.startAt||''), endAt=String(req.body.endAt||'');
+  if(!title||!startAt||Number.isNaN(new Date(startAt).getTime())) return res.status(400).json({error:'Tên và thời gian sự kiện chưa hợp lệ'});
+  const db=load(); const e={id:crypto.randomUUID(),title,description,startAt:new Date(startAt).toISOString(),endAt:endAt&&!Number.isNaN(new Date(endAt).getTime())?new Date(endAt).toISOString():'',createdBy:req.user.username,participants:[],checkedIn:[],checkinCode:crypto.randomBytes(3).toString('hex').toUpperCase(),createdAt:new Date().toISOString()}; db.events.push(e); addLog(db,'event_create',{by:req.user.username,event:title}); save(db); res.json({event:e});
+});
+app.post('/api/events/:id/join', auth, (req,res)=>{
+  const db=load(); const e=db.events.find(x=>x.id===req.params.id); if(!e)return res.status(404).json({error:'Không tìm thấy sự kiện'}); e.participants=e.participants||[]; const i=e.participants.indexOf(req.user.id); if(i>=0)e.participants.splice(i,1); else {e.participants.push(req.user.id);addXp(db.users.find(u=>u.id===req.user.id),10,'event_join_'+e.id,0);} save(db); res.json({joined:i<0,count:e.participants.length});
+});
+app.post('/api/events/:id/checkin', auth, (req,res)=>{
+  const code=cleanText(req.body.code,20).toUpperCase(); const db=load(); const e=db.events.find(x=>x.id===req.params.id); if(!e)return res.status(404).json({error:'Không tìm thấy sự kiện'}); if(code!==String(e.checkinCode||'').toUpperCase())return res.status(400).json({error:'Mã check-in không đúng'}); e.checkedIn=e.checkedIn||[]; if(!e.checkedIn.includes(req.user.id)){e.checkedIn.push(req.user.id);addXp(db.users.find(u=>u.id===req.user.id),25,'event_checkin_'+e.id,0);} save(db); res.json({ok:true});
+});
+app.delete('/api/events/:id', auth, admin, (req,res)=>{ const db=load(); const i=db.events.findIndex(x=>x.id===req.params.id); if(i<0)return res.status(404).json({error:'Không tìm thấy sự kiện'}); const [e]=db.events.splice(i,1); addLog(db,'event_delete',{by:req.user.username,event:e.title}); save(db); res.json({ok:true}); });
+app.get('/api/admin/analytics', auth, admin, (req,res)=>{
+  const db=load(), now=Date.now(), since24=now-86400000; const storageBytes=dir=>{let t=0;try{for(const f of fs.readdirSync(dir)){const p=path.join(dir,f);const st=fs.statSync(p);if(st.isFile())t+=st.size;}}catch{}return t;};
+  const topXp=db.users.slice().sort((a,b)=>(b.xp||0)-(a.xp||0)).slice(0,5).map(u=>({id:u.id,displayName:u.displayName,xp:u.xp||0,level:levelFromXp(u.xp||0)}));
+  res.json({users:db.users.length,online5m:db.users.filter(u=>u.lastSeen&&now-new Date(u.lastSeen).getTime()<300000).length,chat24h:db.chat.filter(m=>new Date(m.createdAt).getTime()>since24).length,teamOpen:db.teamPosts.filter(p=>p.status==='open').length,events:(db.events||[]).length,reportsOpen:db.reports.filter(r=>r.status==='open').length,backups:fs.readdirSync(backupDir).filter(f=>f.endsWith('.json')).length,storageBytes:storageBytes(dataDir)+storageBytes(uploadDir)+storageBytes(backupDir)+storageBytes(sessionDir),topXp});
 });
 
 // ===== Session & Security Center v1.5 =====
@@ -662,6 +763,18 @@ app.post('/api/security/password', auth, loginLimiter, async (req, res) => {
   // revoke other sessions
   const all=persistentSessionStore.readAll(); for (const [sid,sess] of Object.entries(all)) if (sess?.uid===u.id && sid!==req.sessionID) delete all[sid]; persistentSessionStore.writeAll(all);
   res.json({ ok:true });
+});
+
+
+app.get('/api/security/2fa/status', auth, (req,res)=>res.json({enabled:!!req.user.twoFactorEnabled}));
+app.post('/api/security/2fa/setup', auth, (req,res)=>{
+  const db=load(); const u=db.users.find(x=>x.id===req.user.id); if(u.twoFactorEnabled)return res.status(400).json({error:'2FA đã bật'}); const secret=randomBase32(32); u.twoFactorPendingSecret=secret; save(db); const issuer='GiaToc Name Hub'; const label=encodeURIComponent(`${issuer}:${u.username}`); const uri=`otpauth://totp/${label}?secret=${secret}&issuer=${encodeURIComponent(issuer)}&digits=6&period=30`; res.json({secret,uri});
+});
+app.post('/api/security/2fa/confirm', auth, (req,res)=>{
+  const db=load(); const u=db.users.find(x=>x.id===req.user.id); if(!u.twoFactorPendingSecret)return res.status(400).json({error:'Chưa tạo khóa 2FA'}); if(!verifyTotp(u.twoFactorPendingSecret,req.body.code))return res.status(400).json({error:'Mã xác thực không đúng'}); const codes=makeRecoveryCodes(); u.twoFactorSecret=u.twoFactorPendingSecret;u.twoFactorPendingSecret='';u.twoFactorEnabled=true;u.recoveryCodeHashes=codes.map(hashRecovery);addLog(db,'2fa_enable',{user:u.username});save(db);res.json({ok:true,recoveryCodes:codes});
+});
+app.post('/api/security/2fa/disable', auth, loginLimiter, async (req,res)=>{
+  const password=String(req.body.password||''); const db=load(); const u=db.users.find(x=>x.id===req.user.id); if(!u||!await bcrypt.compare(password,u.passwordHash))return res.status(401).json({error:'Mật khẩu không đúng'});u.twoFactorEnabled=false;u.twoFactorSecret='';u.twoFactorPendingSecret='';u.recoveryCodeHashes=[];addLog(db,'2fa_disable',{user:u.username});save(db);res.json({ok:true});
 });
 
 app.get('/api/tools/qr', auth, toolLimiter, async (req, res) => {
@@ -730,6 +843,6 @@ const autoBackupHours = Math.max(1, Math.min(168, Number(process.env.AUTO_BACKUP
 setInterval(() => { try { const file = createBackupFile(); console.log(`[Backup] Tự động: ${file}`); } catch (e) { console.error('[Backup] Tự động lỗi:', e.message); } }, autoBackupHours * 60 * 60 * 1000).unref?.();
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`GiaToc Name Hub v1.5.0 running on port ${PORT}`);
+  console.log(`GiaToc Name Hub v1.6.0 running on port ${PORT}`);
   console.log(`[Storage] ${storageRoot}`);
 });

@@ -1,4 +1,4 @@
-# GiaTộc ┊Name Hub v1.5.0 — Web + PWA + Railway 24/7 + Bubblewrap
+# GiaTộc ┊Name Hub v1.6.0 — Web + PWA + Railway 24/7 + Bubblewrap
 
 Đây vẫn là **website**. PWA/Bubblewrap chỉ là lớp để cài website lên Android khi cần, không chuyển source thành ứng dụng desktop.
 
@@ -168,3 +168,16 @@ Volume vẫn mount tại:
 ```text
 /app/storage
 ```
+
+
+## v1.6.0 — Smart Community
+
+- 🎯 Ghép đồng đội tự động theo game/chế độ/server/giờ chơi.
+- 🏆 Level + XP + huy hiệu có cooldown chống farm chat.
+- 📅 Trung tâm sự kiện: tạo, đăng ký, check-in bằng mã, nhận XP.
+- 🪪 Profile Card 1200×630 có avatar, Role, Level, huy hiệu và QR.
+- 🔐 2FA TOTP + Recovery Codes, không cần dịch vụ bên ngoài.
+- 📈 Analytics quản trị: thành viên, online, chat 24h, tìm đội, sự kiện, báo cáo, backup, storage, top XP.
+- 💬 Chat nâng cao: tìm kiếm, sửa tin 30 phút, ghim tin, gửi ảnh tối đa 3MB.
+
+Không có Game Hub thông minh và không có hệ thống Bang hội trên website.

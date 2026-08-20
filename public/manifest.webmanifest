@@ -2,7 +2,7 @@
   "id": "/",
   "name": "GiaTộc ┊Name Hub",
   "short_name": "GiaTộc Name",
-  "description": "GiaTộc ┊Name Hub v1.5: bạn bè & DM, push notification, báo cáo/timeout, backup/restore, offline queue và công cụ cộng đồng.",
+  "description": "GiaTộc ┊Name Hub v1.6: ghép đồng đội tự động, Level/XP/Huy hiệu, sự kiện, Profile Card, 2FA, Analytics và chat nâng cao.",
   "lang": "vi",
   "dir": "ltr",
   "start_url": "/#overview",
@@ -117,6 +117,39 @@
       "name": "Bạn bè & Tin nhắn riêng",
       "short_name": "Bạn bè",
       "url": "/#friends",
+      "icons": [
+        {
+          "src": "/icons/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    },
+    {
+      "name": "Ghép đồng đội tự động",
+      "short_name": "Ghép đội",
+      "url": "/#match",
+      "icons": [
+        {
+          "src": "/icons/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    },
+    {
+      "name": "Sự kiện cộng đồng",
+      "short_name": "Sự kiện",
+      "url": "/#events",
+      "icons": [
+        {
+          "src": "/icons/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    },
+    {
+      "name": "Profile Card",
+      "short_name": "Profile Card",
+      "url": "/#profile-card",
       "icons": [
         {
           "src": "/icons/icon-192.png",
