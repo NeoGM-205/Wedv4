@@ -1,10 +1,10 @@
-# GiaTộc ┊Name Hub v1.9.0 — Web + PWA + Railway 24/7 + Bubblewrap
+# GiaTộc ┊Name Hub v1.9.1 — Web + PWA + Railway 24/7 + Bubblewrap
 
 Đây vẫn là **website**. PWA/Bubblewrap chỉ là lớp để cài website lên Android khi cần, không chuyển source thành ứng dụng desktop.
 
 
 
-## Nâng cấp v1.9.0 — Phòng voice & Tối ưu chạy nền
+## Nâng cấp v1.9.1 — Phòng voice & Tối ưu chạy nền
 - 🎙️ Phòng voice chơi game bằng WebRTC P2P, có phòng công khai/khóa mã, mute/deafen và đổi micro.
 - ⚡ Tối ưu chạy nền: dừng polling/animation không cần thiết khi app ẩn, giữ voice khi hệ điều hành cho phép và tự nối lại khi quay lại.
 - 🛡️ Chống spam nâng cao cho đăng ký, chat, upload và voice.
