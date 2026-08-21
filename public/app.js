@@ -684,7 +684,8 @@ async function awardAchievementTemplate(id){if(!requireOnline('Trao thành tích
 // ===== v1.9 Phòng voice WebRTC + tối ưu chạy nền =====
 const voiceState = {
   ws:null, localStream:null, roomId:'', roomPin:'', room:null, self:null, peers:new Map(), muted:false, deafened:false,
-  manualLeave:false, reconnectTimer:null, reconnectAttempts:0, selectedMicId:'', iceServers:[], maxParticipants:6, configLoaded:false, turnConfigured:false, audioContext:null, audioBlocked:false
+  manualLeave:false, reconnectTimer:null, reconnectAttempts:0, selectedMicId:'', iceServers:[], maxParticipants:6, configLoaded:false, turnConfigured:false, audioContext:null, audioBlocked:false,
+  relayEnabled:true, relayActive:false, relayTimer:null, relayProcessor:null, relaySource:null, relaySilentGain:null, relayPlayHeads:new Map(), relaySampleRate:16000
 };
 function voiceStatus(text, mode='normal'){
   const el=$('#voiceConnectionState'); if(el){el.textContent=text;el.classList.toggle('offline-ready',mode==='ok');}
@@ -692,7 +693,7 @@ function voiceStatus(text, mode='normal'){
 }
 function voiceSend(payload){if(voiceState.ws?.readyState===WebSocket.OPEN)voiceState.ws.send(JSON.stringify(payload));}
 async function ensureVoiceConfig(){
-  if(voiceState.configLoaded)return;const cfg=await api('/api/voice/config');voiceState.iceServers=cfg.iceServers||[];voiceState.maxParticipants=cfg.maxParticipants||6;voiceState.turnConfigured=!!cfg.turnConfigured;voiceState.configLoaded=true;const input=$('#voiceMaxParticipants');if(input){input.max=String(voiceState.maxParticipants);if(Number(input.value)>voiceState.maxParticipants)input.value=String(voiceState.maxParticipants);}
+  if(voiceState.configLoaded)return;const cfg=await api('/api/voice/config');voiceState.iceServers=cfg.iceServers||[];voiceState.maxParticipants=cfg.maxParticipants||6;voiceState.turnConfigured=!!cfg.turnConfigured;voiceState.relayEnabled=cfg.relayFallback!==false;voiceState.configLoaded=true;const input=$('#voiceMaxParticipants');if(input){input.max=String(voiceState.maxParticipants);if(Number(input.value)>voiceState.maxParticipants)input.value=String(voiceState.maxParticipants);}
 }
 function voicePeerLabel(peer){const m=meta(peer.role);return `${m.icon} ${peer.displayName||peer.username}`;}
 function renderVoiceParticipants(){
@@ -740,7 +741,7 @@ async function populateVoiceMicrophones(){
   const sel=$('#voiceMicSelect');if(!sel||!navigator.mediaDevices?.enumerateDevices)return;try{const devices=(await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==='audioinput');const current=voiceState.selectedMicId||voiceState.localStream?.getAudioTracks?.()[0]?.getSettings?.().deviceId||'';sel.innerHTML='<option value="">Micro mặc định</option>'+devices.map((d,i)=>`<option value="${esc(d.deviceId)}">${esc(d.label||`Micro ${i+1}`)}</option>`).join('');sel.value=current||'';}catch{}}
 async function changeVoiceMicrophone(){
   const id=$('#voiceMicSelect')?.value||'';voiceState.selectedMicId=id;if(!voiceState.roomId)return;
-  try{const next=await navigator.mediaDevices.getUserMedia(voiceAudioConstraints(id));const track=next.getAudioTracks()[0];track.enabled=!voiceState.muted;for(const item of voiceState.peers.values()){const sender=item.pc.getSenders().find(s=>s.track?.kind==='audio');if(sender)await sender.replaceTrack(track);}voiceState.localStream?.getTracks().forEach(t=>t.stop());voiceState.localStream=next;await populateVoiceMicrophones();}
+  try{const next=await navigator.mediaDevices.getUserMedia(voiceAudioConstraints(id));const track=next.getAudioTracks()[0];track.enabled=!voiceState.muted;for(const item of voiceState.peers.values()){const sender=item.pc?.getSenders?.().find(s=>s.track?.kind==='audio');if(sender)await sender.replaceTrack(track);}voiceState.localStream?.getTracks().forEach(t=>t.stop());voiceState.localStream=next;if(voiceState.relayActive)await restartVoiceRelayCapture();await populateVoiceMicrophones();}
   catch(e){alert('Không đổi được micro: '+e.message);}
 }
 function setVoiceAudioBlocked(blocked, message=''){
@@ -752,6 +753,7 @@ async function unlockVoiceAudio(){
   try{
     const AC=window.AudioContext||window.webkitAudioContext;
     if(AC){voiceState.audioContext=voiceState.audioContext||new AC();if(voiceState.audioContext.state==='suspended')await voiceState.audioContext.resume();}
+    if(voiceState.relayActive){setVoiceAudioBlocked(false,'🟢 Âm thanh đã bật • Relay máy chủ');updateVoiceConnectionHint();return;}
     let blocked=0,played=0;
     for(const item of voiceState.peers.values()){
       const audio=item.audioEl;if(!audio)continue;
@@ -762,30 +764,77 @@ async function unlockVoiceAudio(){
     if(!blocked&&played&&$('#voiceQualityHint'))$('#voiceQualityHint').textContent='🟢 Âm thanh đã bật';
   }catch(e){setVoiceAudioBlocked(true,'🔴 Không bật được âm thanh');console.warn('Voice audio unlock:',e);}
 }
+function clearVoiceRelayTimer(){if(voiceState.relayTimer)clearTimeout(voiceState.relayTimer);voiceState.relayTimer=null;}
 function updateVoiceConnectionHint(){
   const hint=$('#voiceQualityHint');if(!hint)return;
+  if(voiceState.relayActive){hint.textContent='🟢 Âm thanh đã kết nối • Relay máy chủ';return;}
   if(voiceState.audioBlocked&&!voiceState.deafened){hint.textContent='🔴 Cần bấm Bật nghe';return;}
   const states=[...voiceState.peers.values()].map(x=>x.pc?.iceConnectionState||'new');
   if(!states.length){hint.textContent=voiceState.turnConfigured?'WebRTC • TURN sẵn sàng':'WebRTC P2P • STUN';return;}
-  if(states.some(s=>s==='failed')){hint.textContent=voiceState.turnConfigured?'🔴 Kết nối âm thanh thất bại':'🔴 Không nối được P2P • cần TURN';return;}
-  if(states.some(s=>s==='disconnected')){hint.textContent='🟠 Âm thanh đang mất kết nối';return;}
-  if(states.some(s=>s==='checking'||s==='new')){hint.textContent='🟡 Đang nối âm thanh...';return;}
-  if(states.every(s=>s==='connected'||s==='completed'))hint.textContent='🟢 Âm thanh đã kết nối';
+  if(states.every(s=>s==='connected'||s==='completed')){clearVoiceRelayTimer();hint.textContent='🟢 Âm thanh đã kết nối';return;}
+  if(states.some(s=>s==='failed')){hint.textContent=voiceState.relayEnabled?'🟠 P2P thất bại • chuyển Relay...':(voiceState.turnConfigured?'🔴 Kết nối âm thanh thất bại':'🔴 Không nối được P2P • cần TURN');if(voiceState.relayEnabled)startVoiceRelayFallback('ice-failed');return;}
+  if(states.some(s=>s==='disconnected')){hint.textContent='🟠 Âm thanh đang mất kết nối';scheduleVoiceRelayFallback(3500);return;}
+  if(states.some(s=>s==='checking'||s==='new')){hint.textContent='🟡 Đang nối âm thanh...';scheduleVoiceRelayFallback(8000);return;}
 }
-function destroyVoicePeers(){for(const item of voiceState.peers.values()){try{item.pc.close();}catch{}if(item.audioEl)try{item.audioEl.remove();}catch{}}voiceState.peers.clear();setVoiceAudioBlocked(false);renderVoiceParticipants();updateVoiceConnectionHint();}
+function destroyVoicePeers(){for(const item of voiceState.peers.values()){try{item.pc?.close?.();}catch{}if(item.audioEl)try{item.audioEl.remove();}catch{}}voiceState.peers.clear();setVoiceAudioBlocked(false);renderVoiceParticipants();updateVoiceConnectionHint();}
+function ensureVoiceAudioContext(){
+  const AC=window.AudioContext||window.webkitAudioContext;if(!AC)return null;
+  voiceState.audioContext=voiceState.audioContext||new AC({latencyHint:'interactive'});
+  if(voiceState.audioContext.state==='suspended')voiceState.audioContext.resume().catch(()=>setVoiceAudioBlocked(true,'🔴 Bấm Bật nghe để mở âm thanh'));
+  return voiceState.audioContext;
+}
+function downsampleVoiceBuffer(input,inputRate,outputRate=16000){
+  if(!input?.length)return new Int16Array(0);const ratio=inputRate/outputRate;const outLen=Math.max(1,Math.floor(input.length/ratio));const out=new Int16Array(outLen);
+  for(let i=0;i<outLen;i++){const start=Math.floor(i*ratio),finish=Math.min(input.length,Math.floor((i+1)*ratio));let sum=0,count=0;for(let j=start;j<finish;j++){sum+=input[j];count++;}const sample=Math.max(-1,Math.min(1,count?sum/count:input[start]||0));out[i]=sample<0?sample*0x8000:sample*0x7fff;}
+  return out;
+}
+async function stopVoiceRelayCapture(){
+  clearVoiceRelayTimer();try{if(voiceState.relayProcessor)voiceState.relayProcessor.onaudioprocess=null;}catch{}
+  for(const node of [voiceState.relaySource,voiceState.relayProcessor,voiceState.relaySilentGain]){try{node?.disconnect?.();}catch{}}
+  voiceState.relaySource=null;voiceState.relayProcessor=null;voiceState.relaySilentGain=null;
+}
+async function restartVoiceRelayCapture(){if(!voiceState.relayActive)return;await stopVoiceRelayCapture();voiceState.relayActive=true;await startVoiceRelayCapture();}
+async function startVoiceRelayCapture(){
+  if(!voiceState.relayActive||!voiceState.localStream)return;const ctx=ensureVoiceAudioContext();if(!ctx)return;
+  try{
+    const source=ctx.createMediaStreamSource(voiceState.localStream);const processor=ctx.createScriptProcessor(2048,1,1);const silent=ctx.createGain();silent.gain.value=0;
+    processor.onaudioprocess=e=>{if(!voiceState.relayActive||voiceState.muted||voiceState.ws?.readyState!==WebSocket.OPEN)return;const input=e.inputBuffer.getChannelData(0);const pcm=downsampleVoiceBuffer(input,ctx.sampleRate,voiceState.relaySampleRate);if(pcm.byteLength)try{voiceState.ws.send(pcm.buffer);}catch{}};
+    source.connect(processor);processor.connect(silent);silent.connect(ctx.destination);voiceState.relaySource=source;voiceState.relayProcessor=processor;voiceState.relaySilentGain=silent;
+  }catch(e){console.warn('Voice relay capture:',e);setVoiceAudioBlocked(true,'🔴 Không mở được Relay âm thanh');}
+}
+async function startVoiceRelayFallback(reason='timeout'){
+  if(!voiceState.relayEnabled||voiceState.relayActive||!voiceState.roomId||voiceState.ws?.readyState!==WebSocket.OPEN||!voiceState.peers.size)return;
+  clearVoiceRelayTimer();voiceState.relayActive=true;voiceState.relayPlayHeads.clear();ensureVoiceAudioContext();
+  for(const item of voiceState.peers.values()){try{item.pc?.close?.();}catch{}item.pc=null;if(item.audioEl){try{item.audioEl.remove();}catch{}item.audioEl=null;}}
+  await startVoiceRelayCapture();setVoiceAudioBlocked(false);voiceStatus('🟢 Đã vào phòng • Relay','ok');updateVoiceConnectionHint();renderVoiceParticipants();
+  console.info('Voice switched to WebSocket relay:',reason);
+}
+function scheduleVoiceRelayFallback(delay=8000){
+  if(!voiceState.relayEnabled||voiceState.relayActive||voiceState.relayTimer||!voiceState.roomId||!voiceState.peers.size)return;
+  voiceState.relayTimer=setTimeout(()=>{voiceState.relayTimer=null;const states=[...voiceState.peers.values()].map(x=>x.pc?.iceConnectionState||'new');if(states.some(s=>!['connected','completed'].includes(s)))startVoiceRelayFallback('ice-timeout');},delay);
+}
+async function handleVoiceRelayPacket(data){
+  if(voiceState.deafened||!voiceState.roomId)return;let ab=data;if(data instanceof Blob)ab=await data.arrayBuffer();if(!(ab instanceof ArrayBuffer)||ab.byteLength<=36)return;
+  if(!voiceState.relayActive)await startVoiceRelayFallback('remote-relay');const ctx=ensureVoiceAudioContext();if(!ctx||ctx.state==='suspended'){setVoiceAudioBlocked(true,'🔴 Bấm Bật nghe để mở âm thanh');return;}
+  const bytes=new Uint8Array(ab);const senderId=new TextDecoder().decode(bytes.slice(0,36)).trim();if(!senderId||senderId===voiceState.self?.connectionId)return;
+  const payload=ab.slice(36);if(payload.byteLength%2)return;const pcm=new Int16Array(payload);if(!pcm.length)return;
+  const audioBuffer=ctx.createBuffer(1,pcm.length,voiceState.relaySampleRate);const channel=audioBuffer.getChannelData(0);for(let i=0;i<pcm.length;i++)channel[i]=pcm[i]/32768;
+  const source=ctx.createBufferSource();source.buffer=audioBuffer;source.connect(ctx.destination);const now=ctx.currentTime;let next=voiceState.relayPlayHeads.get(senderId)||now+0.07;if(next<now||next>now+0.45)next=now+0.07;source.start(next);voiceState.relayPlayHeads.set(senderId,next+audioBuffer.duration);setVoiceAudioBlocked(false);updateVoiceConnectionHint();
+}
 async function createVoicePeer(metaPeer, initiator=false){
   if(!metaPeer?.connectionId||voiceState.peers.has(metaPeer.connectionId))return voiceState.peers.get(metaPeer?.connectionId);
-  const pc=new RTCPeerConnection({iceServers:voiceState.iceServers,bundlePolicy:'max-bundle'});const item={pc,meta:{...metaPeer},audioEl:null,pendingCandidates:[]};voiceState.peers.set(metaPeer.connectionId,item);
+  if(voiceState.relayActive){const item={pc:null,meta:{...metaPeer},audioEl:null,pendingCandidates:[]};voiceState.peers.set(metaPeer.connectionId,item);renderVoiceParticipants();return item;}
+  const pc=new RTCPeerConnection({iceServers:voiceState.iceServers,bundlePolicy:'max-bundle',iceCandidatePoolSize:4,iceTransportPolicy:'all',rtcpMuxPolicy:'require'});const item={pc,meta:{...metaPeer},audioEl:null,pendingCandidates:[]};voiceState.peers.set(metaPeer.connectionId,item);
   for(const track of voiceState.localStream?.getAudioTracks?.()||[]){const sender=pc.addTrack(track,voiceState.localStream);try{const params=sender.getParameters();params.encodings=params.encodings?.length?params.encodings:[{}];params.encodings[0].maxBitrate=64000;await sender.setParameters(params);}catch{}}
   pc.onicecandidate=e=>{if(e.candidate)voiceSend({type:'signal',target:metaPeer.connectionId,data:{candidate:e.candidate.toJSON?.()||e.candidate}});};
   pc.ontrack=e=>{let audio=item.audioEl;if(!audio){audio=document.createElement('audio');audio.autoplay=true;audio.playsInline=true;audio.controls=false;audio.preload='auto';audio.muted=voiceState.deafened;audio.volume=1;audio.dataset.peer=metaPeer.connectionId;$('#voiceRemoteAudio')?.appendChild(audio);item.audioEl=audio;}audio.srcObject=e.streams?.[0]||new MediaStream([e.track]);audio.muted=voiceState.deafened;audio.play().then(()=>{setVoiceAudioBlocked(false);updateVoiceConnectionHint();}).catch(()=>{setVoiceAudioBlocked(true,'🔴 Trình duyệt chặn âm thanh • bấm Bật nghe');});};
   pc.oniceconnectionstatechange=()=>{item.iceState=pc.iceConnectionState;updateVoiceConnectionHint();};
   pc.onconnectionstatechange=()=>{if(pc.connectionState==='failed'&&!voiceState.turnConfigured){setVoiceAudioBlocked(false,'🔴 Không nối được P2P • cần TURN');}if(pc.connectionState==='closed'){try{pc.close();}catch{}}renderVoiceParticipants();updateVoiceConnectionHint();};
   if(initiator){const offer=await pc.createOffer({offerToReceiveAudio:true});await pc.setLocalDescription(offer);voiceSend({type:'signal',target:metaPeer.connectionId,data:{description:pc.localDescription.toJSON?.()||pc.localDescription}});}
-  renderVoiceParticipants();return item;
+  renderVoiceParticipants();scheduleVoiceRelayFallback();return item;
 }
 async function handleVoiceSignal(from,data){
-  let item=voiceState.peers.get(from);if(!item){item=await createVoicePeer({connectionId:from,displayName:'Thành viên',username:'',role:'Member'},false);}const pc=item.pc;
+  if(voiceState.relayActive)return;let item=voiceState.peers.get(from);if(!item){item=await createVoicePeer({connectionId:from,displayName:'Thành viên',username:'',role:'Member'},false);}const pc=item?.pc;if(!pc)return;
   try{
     if(data.description){const desc=data.description;await pc.setRemoteDescription(desc);while(item.pendingCandidates.length)await pc.addIceCandidate(item.pendingCandidates.shift()).catch(()=>{});if(desc.type==='offer'){const answer=await pc.createAnswer();await pc.setLocalDescription(answer);voiceSend({type:'signal',target:from,data:{description:pc.localDescription.toJSON?.()||pc.localDescription}});}}
     if(data.candidate){if(pc.remoteDescription)await pc.addIceCandidate(data.candidate).catch(()=>{});else item.pendingCandidates.push(data.candidate);}
@@ -793,30 +842,30 @@ async function handleVoiceSignal(from,data){
 }
 async function voiceConnect(roomId,pin=''){
   await ensureVoiceConfig();const tk=await api('/api/voice/token',{method:'POST',body:'{}'});
-  const proto=location.protocol==='https:'?'wss':'ws',ws=new WebSocket(`${proto}://${location.host}/voice-signal?token=${encodeURIComponent(tk.token)}`);voiceState.ws=ws;voiceState.roomId=roomId;voiceState.roomPin=pin;voiceState.manualLeave=false;voiceStatus('Đang kết nối...');renderVoiceRoomState();
-  ws.onmessage=async event=>{let msg;try{msg=JSON.parse(event.data);}catch{return;}
+  const proto=location.protocol==='https:'?'wss':'ws',ws=new WebSocket(`${proto}://${location.host}/voice-signal?token=${encodeURIComponent(tk.token)}`);ws.binaryType='arraybuffer';voiceState.ws=ws;voiceState.roomId=roomId;voiceState.roomPin=pin;voiceState.manualLeave=false;voiceStatus('Đang kết nối...');renderVoiceRoomState();
+  ws.onmessage=async event=>{if(event.data instanceof ArrayBuffer||event.data instanceof Blob){await handleVoiceRelayPacket(event.data);return;}let msg;try{msg=JSON.parse(event.data);}catch{return;}
     if(msg.type==='ready'){voiceSend({type:'join',roomId:voiceState.roomId,pin:voiceState.roomPin});return;}
-    if(msg.type==='joined'){voiceState.room=msg.room;voiceState.self=msg.self;voiceState.reconnectAttempts=0;destroyVoicePeers();for(const peer of msg.peers||[])await createVoicePeer(peer,true);voiceStatus('🟢 Đã vào phòng','ok');renderVoiceRoomState();updateVoiceConnectionHint();await loadVoiceRooms();return;}
+    if(msg.type==='joined'){voiceState.room=msg.room;voiceState.self=msg.self;voiceState.reconnectAttempts=0;voiceState.relayActive=false;await stopVoiceRelayCapture();voiceState.relayPlayHeads.clear();destroyVoicePeers();for(const peer of msg.peers||[])await createVoicePeer(peer,true);voiceStatus('🟢 Đã vào phòng','ok');renderVoiceRoomState();updateVoiceConnectionHint();await loadVoiceRooms();return;}
     if(msg.type==='peer-joined'){await createVoicePeer(msg.peer,false);renderVoiceParticipants();return;}
-    if(msg.type==='peer-left'){const item=voiceState.peers.get(msg.connectionId);if(item){try{item.pc.close();}catch{}item.audioEl?.remove();voiceState.peers.delete(msg.connectionId);}renderVoiceParticipants();return;}
+    if(msg.type==='peer-left'){const item=voiceState.peers.get(msg.connectionId);if(item){try{item.pc?.close?.();}catch{}item.audioEl?.remove();voiceState.peers.delete(msg.connectionId);}renderVoiceParticipants();return;}
     if(msg.type==='peer-state'){const item=voiceState.peers.get(msg.peer?.connectionId);if(item)item.meta={...item.meta,...msg.peer};renderVoiceParticipants();return;}
     if(msg.type==='signal'){await handleVoiceSignal(msg.from,msg.data||{});return;}
     if(msg.type==='room-closed'){alert('Phòng voice đã được đóng.');await leaveVoiceRoom(true);return;}
     if(msg.type==='error'){const message=msg.message||'Không thể vào phòng voice';voiceStatus('🔴 '+message);alert(message);await leaveVoiceRoom(true);return;}
   };
-  ws.onclose=()=>{if(voiceState.ws!==ws)return;voiceState.ws=null;destroyVoicePeers();if(voiceState.roomId&&!voiceState.manualLeave&&isOnline()){voiceStatus('🟠 Mất kết nối • đang nối lại');scheduleVoiceReconnect();}else if(voiceState.roomId)voiceStatus('🟠 Mất kết nối');};
+  ws.onclose=()=>{if(voiceState.ws!==ws)return;voiceState.ws=null;voiceState.relayActive=false;stopVoiceRelayCapture();voiceState.relayPlayHeads.clear();destroyVoicePeers();if(voiceState.roomId&&!voiceState.manualLeave&&isOnline()){voiceStatus('🟠 Mất kết nối • đang nối lại');scheduleVoiceReconnect();}else if(voiceState.roomId)voiceStatus('🟠 Mất kết nối');};
   ws.onerror=()=>voiceStatus('🟠 Kết nối voice không ổn định');
 }
 function scheduleVoiceReconnect(){if(voiceState.reconnectTimer||voiceState.manualLeave||!voiceState.roomId)return;const delay=Math.min(15000,1500*Math.pow(1.7,voiceState.reconnectAttempts++))+(document.hidden?3000:0);voiceState.reconnectTimer=setTimeout(async()=>{voiceState.reconnectTimer=null;if(!voiceState.roomId||voiceState.manualLeave||!isOnline())return;try{await voiceConnect(voiceState.roomId,voiceState.roomPin);}catch(e){console.warn('Voice reconnect',e);scheduleVoiceReconnect();}},delay);}
 async function joinVoiceRoom(roomId,locked=false,providedPin=''){
-  if(!requireOnline('Voice Chat'))return;if(!window.RTCPeerConnection)return alert('Trình duyệt này không hỗ trợ WebRTC Voice.');let pin=providedPin||'';if(locked&&!pin){pin=prompt('Nhập mã phòng voice:','')||'';if(!pin)return;}
+  if(!requireOnline('Voice Chat'))return;ensureVoiceAudioContext();if(!window.RTCPeerConnection)return alert('Trình duyệt này không hỗ trợ WebRTC Voice.');let pin=providedPin||'';if(locked&&!pin){pin=prompt('Nhập mã phòng voice:','')||'';if(!pin)return;}
   if(voiceState.roomId&&voiceState.roomId!==roomId)await leaveVoiceRoom(true);
   try{await ensureVoiceMicrophone();voiceState.roomId=roomId;voiceState.roomPin=pin;await voiceConnect(roomId,pin);}catch(e){await leaveVoiceRoom(true);alert('Không thể mở voice: '+e.message);}
 }
 function toggleVoiceMute(){if(!voiceState.roomId)return;voiceState.muted=!voiceState.muted;voiceState.localStream?.getAudioTracks().forEach(t=>t.enabled=!voiceState.muted);voiceSend({type:'state',muted:voiceState.muted,deafened:voiceState.deafened});renderVoiceRoomState();}
 function toggleVoiceDeafen(){if(!voiceState.roomId)return;voiceState.deafened=!voiceState.deafened;for(const item of voiceState.peers.values())if(item.audioEl)item.audioEl.muted=voiceState.deafened;if(!voiceState.deafened)unlockVoiceAudio();else setVoiceAudioBlocked(false,'🔕 Đã tắt âm thanh phòng');voiceSend({type:'state',muted:voiceState.muted,deafened:voiceState.deafened});renderVoiceRoomState();updateVoiceConnectionHint();}
 async function leaveVoiceRoom(silent=false){
-  voiceState.manualLeave=true;if(voiceState.reconnectTimer)clearTimeout(voiceState.reconnectTimer);voiceState.reconnectTimer=null;try{voiceSend({type:'leave'});}catch{}try{voiceState.ws?.close(1000,'leave');}catch{}voiceState.ws=null;destroyVoicePeers();voiceState.localStream?.getTracks().forEach(t=>t.stop());voiceState.localStream=null;voiceState.roomId='';voiceState.roomPin='';voiceState.room=null;voiceState.self=null;voiceState.muted=false;voiceState.deafened=false;voiceState.reconnectAttempts=0;voiceState.audioBlocked=false;voiceStatus('Chưa kết nối');renderVoiceRoomState();if(activeRoute==='voice'&&isOnline())loadVoiceRooms();if(!silent)updatePerformanceUi();
+  voiceState.manualLeave=true;if(voiceState.reconnectTimer)clearTimeout(voiceState.reconnectTimer);voiceState.reconnectTimer=null;voiceState.relayActive=false;await stopVoiceRelayCapture();voiceState.relayPlayHeads.clear();try{voiceSend({type:'leave'});}catch{}try{voiceState.ws?.close(1000,'leave');}catch{}voiceState.ws=null;destroyVoicePeers();voiceState.localStream?.getTracks().forEach(t=>t.stop());voiceState.localStream=null;voiceState.roomId='';voiceState.roomPin='';voiceState.room=null;voiceState.self=null;voiceState.muted=false;voiceState.deafened=false;voiceState.reconnectAttempts=0;voiceState.audioBlocked=false;voiceStatus('Chưa kết nối');renderVoiceRoomState();if(activeRoute==='voice'&&isOnline())loadVoiceRooms();if(!silent)updatePerformanceUi();
 }
 function voiceResumeAfterVisibility(){if(!document.hidden&&voiceState.roomId&&!voiceState.ws&&isOnline()&&!voiceState.manualLeave){scheduleVoiceReconnect();}for(const item of voiceState.peers.values())if(item.audioEl&&!voiceState.deafened)item.audioEl.play().catch(()=>{});}
 
@@ -869,11 +918,11 @@ function formatBytes(bytes){const n=Number(bytes)||0;if(n<1024)return `${n} B`;i
 async function loadSystemStatus(){
   const box=$('#systemStatusGrid'); if(!box||!me)return;
   if(!isOnline()){box.innerHTML='<div class="status-tile warn"><b>🟠 Offline</b><span>Không thể kiểm tra backend lúc này.</span></div>';refreshCacheManager();return;}
-  try{const j=await api('/api/system/status');box.innerHTML=`<div class="status-tile ok"><b>🟢 Backend</b><span>v${esc(j.app?.version||'?')} • uptime ${Math.floor((j.app?.uptimeSeconds||0)/60)} phút</span></div><div class="status-tile ${j.database?.ok?'ok':'bad'}"><b>${j.database?.ok?'🟢':'🔴'} Database</b><span>${j.database?.users||0} users • ${j.database?.logs||0} logs</span></div><div class="status-tile ${j.storage?.ok?'ok':'bad'}"><b>${j.storage?.ok?'🟢':'🔴'} Storage</b><span>${formatBytes(j.storage?.bytes)} • ${esc(j.storage?.root||'')}</span></div><div class="status-tile ${j.push?.ok?'ok':'bad'}"><b>${j.push?.ok?'🟢':'🔴'} Push</b><span>${j.push?.subscriptions||0} subscriptions</span></div><div class="status-tile ok"><b>💾 Backup</b><span>${j.backup?.count||0} bản • ${j.backup?.lastAt?fmtDate(j.backup.lastAt):'chưa có'}</span></div><div class="status-tile ok"><b>🎙️ Voice</b><span>${j.voice?.rooms||0} phòng • ${j.voice?.participants||0} người${j.voice?.turnConfigured?' • TURN ✓':' • STUN'}</span></div><div class="status-tile ok"><b>🧹 Tự dọn</b><span>${j.cleanup?.lastAt?fmtDate(j.cleanup.lastAt):'chưa chạy'}</span></div>`;$('#statusUpdatedAt').textContent=`Cập nhật: ${fmtDate(j.app?.serverTime||new Date().toISOString())}`;if($('#appVersionBadge'))$('#appVersionBadge').textContent=`v${j.app?.version||'1.9.1'}`;
+  try{const j=await api('/api/system/status');box.innerHTML=`<div class="status-tile ok"><b>🟢 Backend</b><span>v${esc(j.app?.version||'?')} • uptime ${Math.floor((j.app?.uptimeSeconds||0)/60)} phút</span></div><div class="status-tile ${j.database?.ok?'ok':'bad'}"><b>${j.database?.ok?'🟢':'🔴'} Database</b><span>${j.database?.users||0} users • ${j.database?.logs||0} logs</span></div><div class="status-tile ${j.storage?.ok?'ok':'bad'}"><b>${j.storage?.ok?'🟢':'🔴'} Storage</b><span>${formatBytes(j.storage?.bytes)} • ${esc(j.storage?.root||'')}</span></div><div class="status-tile ${j.push?.ok?'ok':'bad'}"><b>${j.push?.ok?'🟢':'🔴'} Push</b><span>${j.push?.subscriptions||0} subscriptions</span></div><div class="status-tile ok"><b>💾 Backup</b><span>${j.backup?.count||0} bản • ${j.backup?.lastAt?fmtDate(j.backup.lastAt):'chưa có'}</span></div><div class="status-tile ok"><b>🎙️ Voice</b><span>${j.voice?.rooms||0} phòng • ${j.voice?.participants||0} người${j.voice?.turnConfigured?' • TURN ✓':(j.voice?.relayFallback?' • STUN + Relay dự phòng':' • STUN')}</span></div><div class="status-tile ok"><b>🧹 Tự dọn</b><span>${j.cleanup?.lastAt?fmtDate(j.cleanup.lastAt):'chưa chạy'}</span></div>`;$('#statusUpdatedAt').textContent=`Cập nhật: ${fmtDate(j.app?.serverTime||new Date().toISOString())}`;if($('#appVersionBadge'))$('#appVersionBadge').textContent=`v${j.app?.version||'1.9.2'}`;
     const alerts=j.alerts||[];if($('#systemAlertCount'))$('#systemAlertCount').textContent=`${alerts.length} cảnh báo`;if($('#systemAlerts'))$('#systemAlerts').innerHTML=alerts.length?alerts.map(a=>`<article class="system-alert ${esc(a.level||'info')}"><b>${a.level==='danger'?'🔴':a.level==='warning'?'🟠':'🔵'} ${esc(a.title)}</b><span>${esc(a.detail||'')}</span></article>`).join(''):'<div class="system-alert ok"><b>🟢 Hệ thống ổn định</b><span>Không phát hiện cảnh báo vận hành.</span></div>';updatePerformanceUi();
   }catch(e){box.innerHTML=`<p class="offline-note">${esc(e.message)}</p>`;}
 }
-async function refreshCacheManager(){const box=$('#cacheManagerInfo');if(!box)return;try{const info=await window.getAppCacheInfo?.()||{};box.innerHTML=`<div><b>Service Worker</b><span>${info.controlled?'🟢 Đang kiểm soát':'🟠 Chưa kiểm soát'}</span></div><div><b>Phiên bản client</b><span>${esc(info.version||'1.9.1')}</span></div><div><b>Update chờ</b><span>${info.waiting?'Có bản mới sẵn sàng':'Không'}</span></div><div><b>Cache</b><span>${(info.cacheKeys||[]).map(esc).join(', ')||'Chưa có'}</span></div>`;}catch(e){box.innerHTML=`<p class="muted">${esc(e.message)}</p>`;}}
+async function refreshCacheManager(){const box=$('#cacheManagerInfo');if(!box)return;try{const info=await window.getAppCacheInfo?.()||{};box.innerHTML=`<div><b>Service Worker</b><span>${info.controlled?'🟢 Đang kiểm soát':'🟠 Chưa kiểm soát'}</span></div><div><b>Phiên bản client</b><span>${esc(info.version||'1.9.2')}</span></div><div><b>Update chờ</b><span>${info.waiting?'Có bản mới sẵn sàng':'Không'}</span></div><div><b>Cache</b><span>${(info.cacheKeys||[]).map(esc).join(', ')||'Chưa có'}</span></div>`;}catch(e){box.innerHTML=`<p class="muted">${esc(e.message)}</p>`;}}
 async function checkAppUpdate(){try{const j=await window.checkForAppUpdate?.();await refreshCacheManager();alert(j?.waiting?'Có bản cập nhật mới. Bấm “Cập nhật ngay”.':'Bạn đang dùng bản mới nhất đã phát hiện.');}catch(e){alert(e.message||'Không kiểm tra được cập nhật.')}}
 async function updateAppNow(){try{await window.forceAppUpdate?.();}catch(e){alert(e.message||'Không thể cập nhật.')}}
 async function clearAppCache(){if(!confirm('Xóa cache ứng dụng và tải lại? Offline Queue không bị xóa.'))return;try{await window.clearAppCaches?.();location.reload();}catch(e){alert(e.message||'Không thể xóa cache.')}}

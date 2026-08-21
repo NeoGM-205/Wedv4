@@ -5,7 +5,7 @@ const installBtn = document.getElementById('installAppBtn');
 async function registerSW() {
   if (!('serviceWorker' in navigator)) return null;
   try {
-    const registration = await navigator.serviceWorker.register('/sw.js?v=1.9.1', { updateViaCache: 'none' });
+    const registration = await navigator.serviceWorker.register('/sw.js?v=1.9.2', { updateViaCache: 'none' });
     swRegistration = registration;
     await registration.update();
     return registration;
@@ -33,8 +33,8 @@ if ('serviceWorker' in navigator) {
   });
 
   navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (sessionStorage.getItem('sw-reloaded-v1.9.1')) return;
-    sessionStorage.setItem('sw-reloaded-v1.9.1', '1');
+    if (sessionStorage.getItem('sw-reloaded-v1.9.2')) return;
+    sessionStorage.setItem('sw-reloaded-v1.9.2', '1');
     location.reload();
   });
 
@@ -120,7 +120,7 @@ window.addEventListener('load', () => setTimeout(() => window.refreshPushStatus?
 window.getAppCacheInfo = async () => {
   const registration = swRegistration || await navigator.serviceWorker?.getRegistration?.();
   const cacheKeys = 'caches' in window ? await caches.keys() : [];
-  return { version: '1.9.1', controlled: !!navigator.serviceWorker?.controller, waiting: !!registration?.waiting, installing: !!registration?.installing, cacheKeys };
+  return { version: '1.9.2', controlled: !!navigator.serviceWorker?.controller, waiting: !!registration?.waiting, installing: !!registration?.installing, cacheKeys };
 };
 window.checkForAppUpdate = async () => {
   if (!('serviceWorker' in navigator)) throw new Error('Trình duyệt không hỗ trợ Service Worker.');

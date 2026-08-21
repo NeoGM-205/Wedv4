@@ -18,7 +18,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const httpServer = http.createServer(app);
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = '1.9.1';
+const APP_VERSION = '1.9.2';
 const APP_NAME = 'GiaTộc ┊Name Hub';
 
 // Tất cả dữ liệu phát sinh được gom vào một thư mục duy nhất.
@@ -929,7 +929,8 @@ function verifyVoiceToken(token='') {
   } catch { return null; }
 }
 function voiceIceServers(user) {
-  const servers=[{urls:process.env.VOICE_STUN_URL||'stun:stun.l.google.com:19302'}];
+  const customStun=String(process.env.VOICE_STUN_URL||'').trim();
+  const servers=[{urls:customStun||['stun:stun.l.google.com:19302','stun:stun1.l.google.com:19302','stun:stun.cloudflare.com:3478']}];
   if(process.env.WEBRTC_TURN_URL&&process.env.WEBRTC_TURN_SECRET){
     const ttl=Math.max(300,Math.min(86400,Number(process.env.WEBRTC_TURN_TTL_SECONDS)||3600));
     const username=`${Math.floor(Date.now()/1000)+ttl}:${user?.id||'guest'}`;
@@ -940,7 +941,7 @@ function voiceIceServers(user) {
   }
   return servers;
 }
-app.get('/api/voice/config', auth, (req,res)=>res.json({iceServers:voiceIceServers(req.user),turnConfigured:!!process.env.WEBRTC_TURN_URL,maxParticipants:load().systemSettings.voiceMaxParticipants,meshRecommendedMax:6,backgroundNote:'PWA sẽ giữ voice khi trình duyệt cho phép và tự nối lại khi quay lại ứng dụng.'}));
+app.get('/api/voice/config', auth, (req,res)=>res.json({iceServers:voiceIceServers(req.user),turnConfigured:!!process.env.WEBRTC_TURN_URL,relayFallback:process.env.VOICE_RELAY_FALLBACK!=='false',maxParticipants:load().systemSettings.voiceMaxParticipants,meshRecommendedMax:6,backgroundNote:'PWA sẽ giữ voice khi trình duyệt cho phép và tự nối lại khi quay lại ứng dụng.'}));
 app.post('/api/voice/token', auth, voiceLimiter, (req,res)=>res.json({token:makeVoiceToken(req.user),expiresInSeconds:120}));
 app.get('/api/voice/rooms', auth, (req,res)=>{
   const rooms=[...voiceRooms.values()].filter(r=>Date.now()-r.createdMs<12*60*60*1000).map(publicVoiceRoom).sort((a,b)=>b.participants-a.participants||new Date(b.createdAt)-new Date(a.createdAt));
@@ -1016,7 +1017,7 @@ app.get('/api/system/status', auth, (req,res)=>{
     storage:{ok:writable,root:storageRoot,bytes:storageBytes,dataBytes:dirSize(dataDir),uploadBytes:dirSize(uploadDir),backupBytes:dirSize(backupDir),sessionBytes:dirSize(sessionDir)},
     push:{ok:!!(vapidKeys.publicKey&&vapidKeys.privateKey),subscriptions:db.pushSubscriptions.length},
     backup:{count:backups.length,lastAt:backups[0]?new Date(backups[0].t).toISOString():null,autoHours:Math.max(1,Number(process.env.AUTO_BACKUP_HOURS||6))},
-    voice:{rooms:voiceRooms.size,participants:[...voiceRooms.values()].reduce((n,r)=>n+r.participants.size,0),turnConfigured:!!process.env.WEBRTC_TURN_URL},
+    voice:{rooms:voiceRooms.size,participants:[...voiceRooms.values()].reduce((n,r)=>n+r.participants.size,0),turnConfigured:!!process.env.WEBRTC_TURN_URL,relayFallback:process.env.VOICE_RELAY_FALLBACK!=='false'},
     cleanup:{lastAt:db.systemMeta?.lastCleanupAt||null,lastStats:db.systemMeta?.lastCleanupStats||null}, settings, alerts
   });
 });
@@ -1169,9 +1170,17 @@ function leaveVoicePeer(peer, reason='left'){
 voiceWss.on('connection',(ws,req)=>{
   let token='';try{token=new URL(req.url,'http://localhost').searchParams.get('token')||'';}catch{}
   const user=verifyVoiceToken(token);if(!user){ws.close(4003,'unauthorized');return;}
-  const peer={ws,connectionId:crypto.randomUUID(),userId:user.id,username:user.username,displayName:user.displayName,role:user.role,avatar:user.avatar||'',roomId:'',muted:false,deafened:false,joinAttempts:0};
+  const peer={ws,connectionId:crypto.randomUUID(),userId:user.id,username:user.username,displayName:user.displayName,role:user.role,avatar:user.avatar||'',roomId:'',muted:false,deafened:false,joinAttempts:0,relayWindowStart:Date.now(),relayPackets:0};
   ws.isAlive=true;ws.on('pong',()=>{ws.isAlive=true;});wsSend(ws,{type:'ready',connectionId:peer.connectionId});
-  ws.on('message',raw=>{
+  ws.on('message',(raw,isBinary)=>{
+    if(isBinary){
+      const room=voiceRooms.get(peer.roomId);if(!room||peer.muted)return;
+      const now=Date.now();if(now-peer.relayWindowStart>=1000){peer.relayWindowStart=now;peer.relayPackets=0;}peer.relayPackets++;
+      if(peer.relayPackets>40||raw.length<32||raw.length>4096)return;
+      const header=Buffer.from(String(peer.connectionId).padEnd(36,' ').slice(0,36),'utf8');const packet=Buffer.concat([header,Buffer.from(raw)]);
+      for(const other of room.participants.values())if(other.connectionId!==peer.connectionId&&!other.deafened&&other.ws?.readyState===WebSocket.OPEN)try{other.ws.send(packet,{binary:true});}catch{}
+      return;
+    }
     let msg;try{msg=JSON.parse(String(raw));}catch{return;}
     if(msg.type==='join'){
       peer.joinAttempts++;if(peer.joinAttempts>8){ws.close(4008,'too many join attempts');return;}
@@ -1200,6 +1209,6 @@ const autoBackupHours = Math.max(1, Math.min(168, Number(process.env.AUTO_BACKUP
 setInterval(() => { try { const file = createBackupFile(); console.log(`[Backup] Tự động: ${file}`); } catch (e) { console.error('[Backup] Tự động lỗi:', e.message); } }, autoBackupHours * 60 * 60 * 1000).unref?.();
 
 httpServer.listen(PORT, '0.0.0.0', () => {
-  console.log(`GiaToc Name Hub v1.9.1 running on port ${PORT}`);
+  console.log(`GiaToc Name Hub v1.9.2 running on port ${PORT}`);
   console.log(`[Storage] ${storageRoot}`);
 });
