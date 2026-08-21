@@ -5,3 +5,11 @@ storage/
 .DS_Store
 android-twa/
 *.keystore
+
+# Android Native
+android-native/.gradle/
+android-native/local.properties
+android-native/app/build/
+android-native/build/
+*.jks
+*.keystore

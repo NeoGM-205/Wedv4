@@ -1,4 +1,4 @@
-const VERSION = '1.9.3';
+const VERSION = '1.10.0';
 const APP_CACHE = `giatoc-app-${VERSION}`;
 const RUNTIME_CACHE = `giatoc-runtime-${VERSION}`;
 const DB_NAME = 'giatoc-name-hub-offline';
@@ -9,10 +9,10 @@ const CORE_ASSETS = [
   '/index.html',
   '/offline.html',
   '/manifest.webmanifest',
-  '/style.css?v=1.9.3',
-  '/offline-db.js?v=1.9.3',
-  '/app.js?v=1.9.3',
-  '/pwa.js?v=1.9.3',
+  '/style.css?v=1.10.0',
+  '/offline-db.js?v=1.10.0',
+  '/app.js?v=1.10.0',
+  '/pwa.js?v=1.10.0',
   '/assets/avatar-boss.svg',
   '/assets/avatar-elder.svg',
   '/assets/avatar-member.svg',
@@ -21,7 +21,7 @@ const CORE_ASSETS = [
   '/icons/maskable-192.png',
   '/icons/maskable-512.png'
 ];
-const OPTIONAL_ASSETS = ['/vendor/qrcode.bundle.js?v=1.9.3', '/vendor/pdf-lib.min.js?v=1.9.3'];
+const OPTIONAL_ASSETS = ['/vendor/qrcode.bundle.js?v=1.10.0', '/vendor/pdf-lib.min.js?v=1.10.0'];
 
 async function cacheAppShell() {
   const cache = await caches.open(APP_CACHE);

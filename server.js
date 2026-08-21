@@ -18,7 +18,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const httpServer = http.createServer(app);
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = '1.9.3';
+const APP_VERSION = '1.10.0';
 const APP_NAME = 'GiaTộc ┊Name Hub';
 
 // Tất cả dữ liệu phát sinh được gom vào một thư mục duy nhất.
@@ -1209,6 +1209,6 @@ const autoBackupHours = Math.max(1, Math.min(168, Number(process.env.AUTO_BACKUP
 setInterval(() => { try { const file = createBackupFile(); console.log(`[Backup] Tự động: ${file}`); } catch (e) { console.error('[Backup] Tự động lỗi:', e.message); } }, autoBackupHours * 60 * 60 * 1000).unref?.();
 
 httpServer.listen(PORT, '0.0.0.0', () => {
-  console.log(`GiaToc Name Hub v1.9.3 running on port ${PORT}`);
+  console.log(`GiaToc Name Hub v1.10.0 running on port ${PORT}`);
   console.log(`[Storage] ${storageRoot}`);
 });
