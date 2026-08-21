@@ -11,7 +11,7 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
   <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="/style.css?v=1.8.0">
+  <link rel="stylesheet" href="/style.css?v=1.9.0">
 </head>
 <body>
 <div class="bg"></div>
@@ -30,7 +30,7 @@
   <section id="app" hidden>
     <header class="top card compact">
       <div><h1>GiaTộc ┊Name</h1><small id="clock"></small></div>
-      <div class="top-actions"><span id="networkState" class="network-pill online">🟢 Có mạng</span><button id="installAppBtn" class="ghost" hidden>📲 Cài ứng dụng</button><button data-action="logout">Đăng xuất</button></div>
+      <div class="top-actions"><span id="performanceState" class="network-pill online">⚡ Hoạt động</span><span id="networkState" class="network-pill online">🟢 Có mạng</span><button id="installAppBtn" class="ghost" hidden>📲 Cài ứng dụng</button><button data-action="logout">Đăng xuất</button></div>
     </header>
 
     <section id="offlineBar" class="offline-bar card compact" aria-live="polite">
@@ -38,10 +38,16 @@
       <div class="offline-actions"><button class="ghost" data-action="sync-offline">🔄 Đồng bộ ngay</button><button class="ghost danger-outline" data-action="clear-offline">🧹 Xóa dữ liệu offline</button></div>
     </section>
 
+    <section id="voiceMiniBar" class="voice-mini-bar card compact" hidden aria-live="polite">
+      <div><b>🎙️ <span id="voiceMiniRoom">Phòng voice</span></b><span id="voiceMiniState">Đang kết nối...</span></div>
+      <div class="row voice-mini-actions"><button class="ghost tiny" data-action="voice-toggle-mute">🎤 Tắt mic</button><button class="ghost tiny" data-go="voice">Mở phòng</button><button class="danger tiny" data-action="voice-leave">Rời phòng</button></div>
+    </section>
+
     <nav class="hub-nav card" aria-label="Điều hướng">
       <button data-route="overview">🏠 Tổng quan</button>
       <button data-route="profile">🏆 Thành tích & Hồ sơ</button>
       <button data-route="chat">💬 Trò chuyện</button>
+      <button data-route="voice">🎙️ Phòng voice chơi game</button>
       <button data-route="team">🤝 Tìm đồng đội</button>
       <button data-route="match">🎯 Ghép đội tự động</button>
       <button data-route="events">📅 Sự kiện</button>
@@ -78,7 +84,7 @@
         <section class="card feature-overview">
           <div class="section-title"><h2>🧰 Tiện ích cộng đồng</h2><span class="status-pill">Web + PWA</span></div>
           <div class="quick-grid">
-            <button data-go="chat">💬 Trò chuyện</button><button data-go="team">🤝 Tìm đồng đội</button><button data-go="match">🎯 Ghép đội</button><button data-go="events">📅 Sự kiện</button><button data-go="profile-card">👤 Profile Card</button><button data-go="showcase">🖼️ Showcase</button><button data-go="highlights">🎬 Highlight Vault</button><button data-go="toolbox">🧰 Toolbox</button><button data-go="notifications">🔔 Thông báo</button><button data-go="friends">👥 Bạn bè & DM</button><button data-go="sync-center">🔄 Đồng bộ</button><button data-go="avatar-tool">👑 Avatar Role</button><button data-go="qr">🔳 Tạo QR</button>
+            <button data-go="chat">💬 Trò chuyện</button><button data-go="voice">🎙️ Voice chơi game</button><button data-go="team">🤝 Tìm đồng đội</button><button data-go="match">🎯 Ghép đội</button><button data-go="events">📅 Sự kiện</button><button data-go="profile-card">👤 Profile Card</button><button data-go="showcase">🖼️ Showcase</button><button data-go="highlights">🎬 Highlight Vault</button><button data-go="toolbox">🧰 Toolbox</button><button data-go="notifications">🔔 Thông báo</button><button data-go="friends">👥 Bạn bè & DM</button><button data-go="sync-center">🔄 Đồng bộ</button><button data-go="avatar-tool">👑 Avatar Role</button><button data-go="qr">🔳 Tạo QR</button>
             <button data-go="pdf">📄 PDF</button><button data-go="tournament">🏅 Bảng đấu</button><button data-go="banner">🖼️ Banner</button><button data-go="image-tool">✂️ Ảnh</button>
           </div>
         </section>
@@ -121,6 +127,39 @@
         <div id="chatMessages" class="chat-messages"></div>
         <div class="chat-attachment-row"><input id="chatImage" type="file" accept="image/png,image/jpeg,image/webp,image/gif"><small>Ảnh tối đa 3MB • gửi ảnh cần mạng</small></div>
         <div class="chat-compose"><input id="chatInput" maxlength="500" placeholder="Nhập tin nhắn..." data-enter-action="send-chat"><button data-action="send-chat">Gửi</button></div>
+      </section>
+    </section>
+
+    <section class="page-section" data-section="voice" hidden>
+      <div class="two-col voice-layout">
+        <section class="card">
+          <div class="section-title"><h2>🎙️ Phòng voice chơi game</h2><span id="voiceConnectionState" class="status-pill">Chưa kết nối</span></div>
+          <p class="muted">Âm thanh truyền trực tiếp giữa các thành viên bằng WebRTC. Máy chủ chỉ làm nhiệm vụ kết nối, không ghi âm cuộc trò chuyện.</p>
+          <div class="voice-create-grid">
+            <div><label>Tên phòng</label><input id="voiceRoomName" maxlength="60" placeholder="Ví dụ: Leo Rank tối nay"></div>
+            <div><label>Game</label><select id="voiceGame"><option>Roblox</option><option>Minecraft</option><option>Free Fire</option><option>Play Together</option><option>Oxide</option><option>Khác</option></select></div>
+            <div><label>Số người tối đa</label><input id="voiceMaxParticipants" type="number" min="2" max="8" value="6"></div>
+            <div><label>Mã phòng (không bắt buộc)</label><input id="voiceRoomPin" maxlength="12" type="password" placeholder="Từ 4 ký tự"></div>
+          </div>
+          <div class="row"><button data-action="voice-create-room">➕ Tạo phòng</button><button class="ghost" data-action="voice-refresh-rooms">🔄 Làm mới danh sách</button></div>
+          <p class="muted">Để ít lag nhất, nên dùng 2–6 người/phòng. Phòng tối đa 8 người vì voice P2P sẽ dùng thêm băng thông khi đông.</p>
+        </section>
+        <section class="card">
+          <div class="section-title"><h2>📡 Phòng đang mở</h2><span id="voiceRoomCount" class="status-pill">0 phòng</span></div>
+          <div id="voiceRoomList" class="voice-room-list"><p class="muted">Đang tải danh sách phòng...</p></div>
+        </section>
+      </div>
+      <section id="voiceCurrentRoom" class="card voice-current-room" hidden>
+        <div class="section-title"><div><h2 id="voiceCurrentTitle">🎧 Đang trong phòng</h2><p id="voiceCurrentMeta" class="muted"></p></div><span id="voiceQualityHint" class="status-pill">WebRTC P2P</span></div>
+        <div class="voice-controls">
+          <button id="voiceMuteBtn" data-action="voice-toggle-mute">🎤 Tắt mic</button>
+          <button id="voiceDeafenBtn" class="ghost" data-action="voice-toggle-deafen">🔊 Tắt âm thanh phòng</button>
+          <div class="voice-device"><label>Micro</label><select id="voiceMicSelect" data-change-action="voice-change-mic"><option value="">Micro mặc định</option></select></div>
+          <button class="danger" data-action="voice-leave">🚪 Rời phòng</button>
+        </div>
+        <div id="voiceParticipants" class="voice-participants"></div>
+        <div id="voiceRemoteAudio" class="voice-audio-bin" aria-hidden="true"></div>
+        <p class="muted voice-background-note">🌙 Khi chuyển ứng dụng sang nền, Hub sẽ dừng các tác vụ giao diện không cần thiết để giảm CPU/RAM nhưng vẫn giữ voice nếu trình duyệt/hệ điều hành cho phép. Khi quay lại, kết nối sẽ tự khôi phục nếu bị hệ điều hành tạm dừng.</p>
       </section>
     </section>
 
@@ -305,14 +344,16 @@
     </section>
 
     <section class="page-section" data-section="status" hidden>
+      <section class="card system-alert-card"><div class="section-title"><h2>🚨 Cảnh báo hệ thống</h2><span id="systemAlertCount" class="status-pill">0 cảnh báo</span></div><div id="systemAlerts" class="system-alerts"><p class="muted">Đang kiểm tra...</p></div></section>
       <div class="two-col">
         <section class="card"><div class="section-title"><h2>🚦 System Status</h2><button class="ghost tiny" data-action="load-system-status">Làm mới</button></div><div id="systemStatusGrid" class="status-grid"></div><p id="statusUpdatedAt" class="muted"></p></section>
-        <section class="card"><div class="section-title"><h2>📦 Version & Cache Manager</h2><span id="appVersionBadge" class="status-pill">v1.8.0</span></div>
+        <section class="card"><div class="section-title"><h2>📦 Version & Cache Manager</h2><span id="appVersionBadge" class="status-pill">v1.9.0</span></div>
           <div id="cacheManagerInfo" class="status-list"></div>
           <div class="row"><button data-action="check-app-update">🔎 Kiểm tra cập nhật</button><button class="ghost" data-action="update-app-now">⬆️ Cập nhật ngay</button><button class="ghost danger-outline" data-action="clear-app-cache">🧹 Xóa cache ứng dụng</button></div>
           <p class="muted">Xóa cache ứng dụng không xóa tài khoản trên máy chủ. Dữ liệu Offline Queue được quản lý riêng trong Trung tâm Đồng bộ.</p>
         </section>
       </div>
+      <section class="card background-performance-card"><div class="section-title"><h2>⚡ Tối ưu chạy nền</h2><span id="backgroundModeBadge" class="status-pill">Đang hoạt động</span></div><div class="status-list"><div><b>Chat tự làm mới</b><span>Dừng khi ứng dụng ở nền</span></div><div><b>Thông báo</b><span>Dùng Push thay cho polling nền</span></div><div><b>Hiệu ứng giao diện</b><span>Tạm dừng khi ở nền</span></div><div><b>Voice</b><span>Giữ kết nối khi hệ điều hành cho phép</span></div></div><p class="muted">PWA không thể ép Android giữ tiến trình chạy mãi khi màn hình tắt. Hub ưu tiên tiết kiệm tài nguyên và tự kết nối lại khi bạn mở ứng dụng.</p></section>
     </section>
 
     <section class="page-section" data-section="security" hidden>
@@ -338,15 +379,20 @@
         <div class="admin-subgrid"><section class="admin-subcard"><div class="section-title"><h3>🚩 Trung tâm báo cáo</h3><span class="status-pill">Moderation</span></div><div id="adminReports" class="report-list"></div></section><section class="admin-subcard"><div class="section-title"><h3>🗂️ Backup & Restore</h3><span id="backupPolicy" class="status-pill">Railway Volume</span></div><div id="backupList" class="backup-list"></div></section><section class="admin-subcard achievement-composer"><div class="section-title"><h3>🏅 Achievement Composer</h3><button class="ghost tiny" data-action="load-achievement-templates">Làm mới</button></div><div class="composer-form"><input id="achTemplateIcon" value="🏆" maxlength="8" placeholder="Icon"><input id="achTemplateTitle" placeholder="Tên thành tích"><select id="achTemplateRarity"><option>Common</option><option>Rare</option><option>Epic</option><option>Legendary</option></select><input id="achTemplateXp" type="number" min="0" max="100" value="20" placeholder="XP"><textarea id="achTemplateDescription" maxlength="240" placeholder="Mô tả thành tích"></textarea><button data-action="create-achievement-template">Tạo mẫu thành tích</button></div><div id="achievementTemplateList" class="template-list"></div></section><section class="admin-subcard analytics-wide"><div class="section-title"><h3>📈 Analytics quản trị</h3><button class="ghost tiny" data-action="load-analytics">Làm mới</button></div><div id="analyticsGrid" class="analytics-grid"></div><div id="analyticsTopXp"></div></section>
           <section class="admin-subcard permission-card"><div class="section-title"><h3>🔐 Permission Matrix</h3><button class="ghost tiny" data-action="load-permissions">Làm mới</button></div><p class="muted">Boss cấu hình quyền chi tiết cho Kì Cựu và Member. Quyền Boss luôn đầy đủ.</p><div id="permissionMatrix" class="permission-matrix"></div><button id="savePermissionBtn" data-action="save-permissions">💾 Lưu Permission Matrix</button></section>
           <section class="admin-subcard audit-card"><div class="section-title"><h3>📋 Audit Log</h3><button class="ghost tiny" data-action="load-audit">Làm mới</button></div><div class="audit-filters"><input id="auditSearch" placeholder="Tìm hành động, tài khoản, target..."><select id="auditCategory"><option value="">Tất cả nhóm</option><option value="system">System</option><option value="security">Security</option><option value="moderation">Moderation</option><option value="backup">Backup</option><option value="achievement">Achievement</option><option value="event">Event</option></select><button class="tiny" data-action="load-audit">Lọc</button></div><div id="auditLog" class="audit-list"></div></section>
+          <section id="systemSettingsCard" class="admin-subcard system-settings-card"><div class="section-title"><h3>⚙️ Cài đặt hệ thống tập trung</h3><button class="ghost tiny" data-action="load-system-settings">Làm mới</button></div>
+            <p class="muted">Chỉ Boss có thể thay đổi. Giúp chỉnh các giới hạn vận hành mà không cần sửa file <code>.env</code>.</p>
+            <div class="system-settings-grid"><label class="check-row"><input id="settingRegistration" type="checkbox"> Cho phép đăng ký tài khoản mới</label><label>Thời gian chờ chat (ms)<input id="settingChatCooldown" type="number" min="500" max="10000" step="100"></label><label>Số người tối đa/phòng voice<input id="settingVoiceMax" type="number" min="2" max="8"></label><label>Số phòng voice tối đa<input id="settingVoiceRooms" type="number" min="1" max="100"></label><label>Tự dọn mỗi (giờ)<input id="settingCleanupHours" type="number" min="1" max="168"></label><label>Giữ Audit Log (ngày)<input id="settingLogDays" type="number" min="7" max="365"></label><label>Xóa upload rác sau (ngày)<input id="settingOrphanDays" type="number" min="1" max="90"></label><label>Cảnh báo Storage từ (MB)<input id="settingStorageMb" type="number" min="64" max="10240"></label></div>
+            <div class="row"><button data-action="save-system-settings">💾 Lưu cài đặt</button><button class="ghost" data-action="run-system-cleanup">🧹 Dọn dữ liệu rác ngay</button></div><p id="cleanupResult" class="muted"></p>
+          </section>
         </div>
       </section>
     </section>
   </section>
 </main>
-<script src="/vendor/qrcode.bundle.js?v=1.8.0"></script>
-<script src="/vendor/pdf-lib.min.js?v=1.8.0"></script>
-<script src="/offline-db.js?v=1.8.0"></script>
-<script src="/app.js?v=1.8.0"></script>
-<script src="/pwa.js?v=1.8.0"></script>
+<script src="/vendor/qrcode.bundle.js?v=1.9.0"></script>
+<script src="/vendor/pdf-lib.min.js?v=1.9.0"></script>
+<script src="/offline-db.js?v=1.9.0"></script>
+<script src="/app.js?v=1.9.0"></script>
+<script src="/pwa.js?v=1.9.0"></script>
 </body>
 </html>

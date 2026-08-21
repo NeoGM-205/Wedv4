@@ -4,5 +4,23 @@
   "logs": [],
   "chat": [],
   "notifications": [],
-  "teamPosts": []
+  "teamPosts": [],
+  "friendRequests": [],
+  "directMessages": [],
+  "reports": [],
+  "pushSubscriptions": [],
+  "events": [],
+  "achievementTemplates": [],
+  "permissionMatrix": {},
+  "systemSettings": {
+    "registrationEnabled": true,
+    "chatCooldownMs": 1200,
+    "voiceMaxParticipants": 6,
+    "voiceMaxRooms": 20,
+    "cleanupIntervalHours": 6,
+    "logRetentionDays": 30,
+    "uploadOrphanDays": 7,
+    "storageWarningMb": 512
+  },
+  "systemMeta": {}
 }

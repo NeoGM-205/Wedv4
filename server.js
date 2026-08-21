@@ -10,12 +10,15 @@ import crypto from 'crypto';
 import QRCode from 'qrcode';
 import { PDFDocument } from 'pdf-lib';
 import webpush from 'web-push';
+import http from 'http';
+import { WebSocketServer, WebSocket } from 'ws';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
+const httpServer = http.createServer(app);
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = '1.8.0';
+const APP_VERSION = '1.9.0';
 const APP_NAME = 'GiaTộc ┊Name Hub';
 
 // Tất cả dữ liệu phát sinh được gom vào một thư mục duy nhất.
@@ -67,6 +70,8 @@ function getSessionSecret() {
     return crypto.randomBytes(48).toString('hex');
   }
 }
+
+const sessionSecret = getSessionSecret();
 
 class JsonFileSessionStore extends session.Store {
   constructor(file) {
@@ -170,12 +175,34 @@ const DEFAULT_PERMISSION_MATRIX = {
   'Kì Cựu': { manageMembers:true, manageAchievements:true, manageReports:true, manageBackups:false, viewAnalytics:true, manageEvents:true, viewAudit:true, managePermissions:false },
   'Member': { manageMembers:false, manageAchievements:false, manageReports:false, manageBackups:false, viewAnalytics:false, manageEvents:false, viewAudit:false, managePermissions:false }
 };
-const defaultDb = { users: [], music: [], logs: [], chat: [], notifications: [], teamPosts: [], friendRequests: [], directMessages: [], reports: [], pushSubscriptions: [], events: [], achievementTemplates: [], permissionMatrix: structuredClone(DEFAULT_PERMISSION_MATRIX) };
+const DEFAULT_SYSTEM_SETTINGS = {
+  registrationEnabled: true,
+  chatCooldownMs: 1200,
+  voiceMaxParticipants: 6,
+  voiceMaxRooms: 20,
+  cleanupIntervalHours: 6,
+  logRetentionDays: 30,
+  uploadOrphanDays: 7,
+  storageWarningMb: 512
+};
+function normalizeSystemSettings(value={}) {
+  const v={...DEFAULT_SYSTEM_SETTINGS,...(value||{})};
+  v.registrationEnabled=!!v.registrationEnabled;
+  v.chatCooldownMs=Math.max(500,Math.min(10000,Number(v.chatCooldownMs)||1200));
+  v.voiceMaxParticipants=Math.max(2,Math.min(8,Number(v.voiceMaxParticipants)||6));
+  v.voiceMaxRooms=Math.max(1,Math.min(100,Number(v.voiceMaxRooms)||20));
+  v.cleanupIntervalHours=Math.max(1,Math.min(168,Number(v.cleanupIntervalHours)||6));
+  v.logRetentionDays=Math.max(7,Math.min(365,Number(v.logRetentionDays)||30));
+  v.uploadOrphanDays=Math.max(1,Math.min(90,Number(v.uploadOrphanDays)||7));
+  v.storageWarningMb=Math.max(64,Math.min(10240,Number(v.storageWarningMb)||512));
+  return v;
+}
+const defaultDb = { users: [], music: [], logs: [], chat: [], notifications: [], teamPosts: [], friendRequests: [], directMessages: [], reports: [], pushSubscriptions: [], events: [], achievementTemplates: [], permissionMatrix: structuredClone(DEFAULT_PERMISSION_MATRIX), systemSettings: structuredClone(DEFAULT_SYSTEM_SETTINGS), systemMeta: {} };
 const normalizeDb = db => ({
   ...defaultDb, ...(db || {}),
   users: db?.users || [], music: db?.music || [], logs: db?.logs || [], chat: db?.chat || [],
   notifications: db?.notifications || [], teamPosts: db?.teamPosts || [], friendRequests: db?.friendRequests || [],
-  directMessages: db?.directMessages || [], reports: db?.reports || [], pushSubscriptions: db?.pushSubscriptions || [], events: db?.events || [], achievementTemplates: db?.achievementTemplates || [], permissionMatrix: { ...structuredClone(DEFAULT_PERMISSION_MATRIX), ...(db?.permissionMatrix || {}) }
+  directMessages: db?.directMessages || [], reports: db?.reports || [], pushSubscriptions: db?.pushSubscriptions || [], events: db?.events || [], achievementTemplates: db?.achievementTemplates || [], permissionMatrix: { ...structuredClone(DEFAULT_PERMISSION_MATRIX), ...(db?.permissionMatrix || {}) }, systemSettings: normalizeSystemSettings(db?.systemSettings), systemMeta: db?.systemMeta || {}
 });
 const load = () => { try { return normalizeDb(JSON.parse(fs.readFileSync(dbPath, 'utf8'))); } catch { return structuredClone(defaultDb); } };
 const save = db => fs.writeFileSync(dbPath, JSON.stringify(normalizeDb(db), null, 2));
@@ -187,7 +214,7 @@ app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use(session({
   store: persistentSessionStore,
-  secret: getSessionSecret(),
+  secret: sessionSecret,
   resave: false,
   saveUninitialized: false,
   rolling: true,
@@ -203,8 +230,12 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname, 'public')));
 
 const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 8, standardHeaders: true, legacyHeaders: false });
+const registerLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 5, standardHeaders: true, legacyHeaders: false });
 const chatLimiter = rateLimit({ windowMs: 10 * 1000, limit: 6, standardHeaders: true, legacyHeaders: false });
 const toolLimiter = rateLimit({ windowMs: 60 * 1000, limit: 30, standardHeaders: true, legacyHeaders: false });
+const voiceLimiter = rateLimit({ windowMs: 60 * 1000, limit: 12, standardHeaders: true, legacyHeaders: false });
+const uploadLimiter = rateLimit({ windowMs: 10 * 60 * 1000, limit: 25, standardHeaders: true, legacyHeaders: false });
+const chatCooldownByUser = new Map();
 
 const diskStorage = multer.diskStorage({
   destination: uploadDir,
@@ -398,12 +429,13 @@ app.get('/api/health', (req, res) => res.json({
   storage: { root: storageRoot, data: dataDir, uploads: uploadDir, backups: backupDir }
 }));
 
-app.post('/api/register', async (req, res) => {
+app.post('/api/register', registerLimiter, async (req, res) => {
   const username = cleanText(req.body.username, 30);
   const password = String(req.body.password || '');
   const displayName = cleanText(req.body.displayName || username, 40);
   if (!username || !password || username.length < 3 || password.length < 6) return res.status(400).json({ error: 'Thông tin chưa hợp lệ' });
   const db = load();
+  if (!db.systemSettings.registrationEnabled && db.users.length > 0) return res.status(403).json({ error: 'Hệ thống đang tạm khóa đăng ký tài khoản mới' });
   if (db.users.some(u => u.username.toLowerCase() === username.toLowerCase())) return res.status(409).json({ error: 'Tên đăng nhập đã tồn tại' });
   const first = db.users.length === 0;
   const u = {
@@ -469,7 +501,7 @@ app.post('/api/profile', auth, (req, res) => {
   save(db);
   res.json({ user: safeUser(u) });
 });
-app.post('/api/avatar', auth, avatarUpload.single('avatar'), (req, res) => {
+app.post('/api/avatar', auth, uploadLimiter, avatarUpload.single('avatar'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Chưa chọn ảnh' });
   const db = load();
   const u = db.users.find(x => x.id === req.user.id);
@@ -513,6 +545,11 @@ app.get('/api/chat', auth, (req, res) => {
 });
 app.post('/api/chat', auth, chatLimiter, (req, res) => {
   if (!ensureCanCommunicate(req.user, res)) return;
+  const chatSettings = load().systemSettings;
+  const nowChat = Date.now();
+  const lastChat = chatCooldownByUser.get(req.user.id) || 0;
+  if (nowChat - lastChat < chatSettings.chatCooldownMs) return res.status(429).json({ error: `Gửi quá nhanh. Vui lòng chờ ${Math.ceil((chatSettings.chatCooldownMs - (nowChat-lastChat))/1000)} giây.` });
+  chatCooldownByUser.set(req.user.id, nowChat);
   const text = cleanText(req.body.text, 500);
   const clientId = cleanText(req.body.clientId, 100);
   const room = cleanText(req.body.room || 'general', 40) || 'general';
@@ -540,7 +577,7 @@ app.post('/api/chat', auth, chatLimiter, (req, res) => {
 });
 
 const chatImageUpload = multer({ storage: diskStorage, limits:{fileSize:3*1024*1024}, fileFilter:(req,file,cb)=>cb(null,/^image\/(png|jpeg|webp|gif)$/.test(file.mimetype)) });
-app.post('/api/chat/upload', auth, chatImageUpload.single('image'), (req,res)=>{
+app.post('/api/chat/upload', auth, uploadLimiter, chatImageUpload.single('image'), (req,res)=>{
   if (!ensureCanCommunicate(req.user,res)) return;
   if(!req.file) return res.status(400).json({error:'Chỉ hỗ trợ ảnh PNG/JPG/WebP/GIF tối đa 3MB'});
   res.json({url:'/uploads/'+req.file.filename});
@@ -843,7 +880,7 @@ app.get('/api/community-pulse', auth, (req,res)=>{
 app.get('/api/highlights', auth, (req,res)=>{
   const db=load(); const u=db.users.find(x=>x.id===req.user.id); res.json({highlights:(u?.highlights||[]).slice().reverse()});
 });
-app.post('/api/highlights', auth, chatImageUpload.single('image'), (req,res)=>{
+app.post('/api/highlights', auth, uploadLimiter, chatImageUpload.single('image'), (req,res)=>{
   const db=load(); const u=db.users.find(x=>x.id===req.user.id); if(!u)return res.status(404).json({error:'Không tìm thấy tài khoản'});
   const title=cleanText(req.body.title,80), game=cleanText(req.body.game,60), note=cleanText(req.body.note,240), externalUrl=cleanText(req.body.externalUrl,800);
   let url=req.file?'/uploads/'+req.file.filename:'';
@@ -870,23 +907,121 @@ app.post('/api/prestige', auth, (req,res)=>{
 });
 
 
+// ===== v1.9 Voice Chat + Performance & Operations =====
+const voiceRooms = new Map();
+function hashRoomPin(value='') { return crypto.createHash('sha256').update(String(value)).digest('hex'); }
+function publicVoiceRoom(room) {
+  return { id:room.id, name:room.name, game:room.game, maxParticipants:room.maxParticipants, participants:room.participants.size, locked:!!room.pinHash, ownerUsername:room.ownerUsername, createdAt:room.createdAt };
+}
+function voicePeerView(peer) { return { connectionId:peer.connectionId, userId:peer.userId, username:peer.username, displayName:peer.displayName, role:peer.role, avatar:peer.avatar||'', muted:!!peer.muted, deafened:!!peer.deafened }; }
+function makeVoiceToken(user) {
+  const payload=Buffer.from(JSON.stringify({uid:user.id,exp:Date.now()+2*60*1000,nonce:crypto.randomBytes(8).toString('hex')})).toString('base64url');
+  const sig=crypto.createHmac('sha256',sessionSecret).update(payload).digest('base64url');
+  return `${payload}.${sig}`;
+}
+function verifyVoiceToken(token='') {
+  try {
+    const [payload,sig]=String(token).split('.'); if(!payload||!sig)return null;
+    const expected=crypto.createHmac('sha256',sessionSecret).update(payload).digest('base64url');
+    const a=Buffer.from(sig),b=Buffer.from(expected); if(a.length!==b.length||!crypto.timingSafeEqual(a,b))return null;
+    const data=JSON.parse(Buffer.from(payload,'base64url').toString('utf8')); if(!data.uid||Number(data.exp)<Date.now())return null;
+    const db=load(),u=db.users.find(x=>x.id===data.uid&&!x.banned); return u||null;
+  } catch { return null; }
+}
+function voiceIceServers(user) {
+  const servers=[{urls:process.env.VOICE_STUN_URL||'stun:stun.l.google.com:19302'}];
+  if(process.env.WEBRTC_TURN_URL&&process.env.WEBRTC_TURN_SECRET){
+    const ttl=Math.max(300,Math.min(86400,Number(process.env.WEBRTC_TURN_TTL_SECONDS)||3600));
+    const username=`${Math.floor(Date.now()/1000)+ttl}:${user?.id||'guest'}`;
+    const credential=crypto.createHmac('sha1',process.env.WEBRTC_TURN_SECRET).update(username).digest('base64');
+    servers.push({urls:process.env.WEBRTC_TURN_URL,username,credential});
+  } else if(process.env.WEBRTC_TURN_URL&&process.env.WEBRTC_TURN_USERNAME&&process.env.WEBRTC_TURN_CREDENTIAL) {
+    servers.push({urls:process.env.WEBRTC_TURN_URL,username:process.env.WEBRTC_TURN_USERNAME,credential:process.env.WEBRTC_TURN_CREDENTIAL});
+  }
+  return servers;
+}
+app.get('/api/voice/config', auth, (req,res)=>res.json({iceServers:voiceIceServers(req.user),maxParticipants:load().systemSettings.voiceMaxParticipants,meshRecommendedMax:6,backgroundNote:'PWA sẽ giữ voice khi trình duyệt cho phép và tự nối lại khi quay lại ứng dụng.'}));
+app.post('/api/voice/token', auth, voiceLimiter, (req,res)=>res.json({token:makeVoiceToken(req.user),expiresInSeconds:120}));
+app.get('/api/voice/rooms', auth, (req,res)=>{
+  const rooms=[...voiceRooms.values()].filter(r=>Date.now()-r.createdMs<12*60*60*1000).map(publicVoiceRoom).sort((a,b)=>b.participants-a.participants||new Date(b.createdAt)-new Date(a.createdAt));
+  res.json({rooms});
+});
+app.post('/api/voice/rooms', auth, voiceLimiter, (req,res)=>{
+  if(!ensureCanCommunicate(req.user,res))return;
+  const db=load(),settings=db.systemSettings;
+  if(voiceRooms.size>=settings.voiceMaxRooms)return res.status(429).json({error:'Đã đạt giới hạn phòng voice đang mở'});
+  const owned=[...voiceRooms.values()].filter(r=>r.ownerId===req.user.id); if(owned.length>=2)return res.status(429).json({error:'Mỗi thành viên chỉ mở tối đa 2 phòng voice cùng lúc'});
+  const name=cleanText(req.body.name,60),game=cleanText(req.body.game,40)||'Chơi game cùng'; const pin=cleanText(req.body.pin,12);
+  if(!name)return res.status(400).json({error:'Nhập tên phòng voice'}); if(pin&&pin.length<4)return res.status(400).json({error:'Mã phòng cần ít nhất 4 ký tự'});
+  const requested=Math.max(2,Number(req.body.maxParticipants)||settings.voiceMaxParticipants); const maxParticipants=Math.min(settings.voiceMaxParticipants,requested,8);
+  const room={id:crypto.randomBytes(4).toString('hex'),name,game,maxParticipants,pinHash:pin?hashRoomPin(pin):'',ownerId:req.user.id,ownerUsername:req.user.username,createdAt:new Date().toISOString(),createdMs:Date.now(),lastActive:Date.now(),participants:new Map()};
+  voiceRooms.set(room.id,room); addLog(db,'voice_room_create',{by:req.user.username,room:room.id,category:'system'});save(db);res.json({room:publicVoiceRoom(room)});
+});
+app.delete('/api/voice/rooms/:id', auth, voiceLimiter, (req,res)=>{
+  const room=voiceRooms.get(req.params.id);if(!room)return res.status(404).json({error:'Phòng không còn tồn tại'});if(room.ownerId!==req.user.id&&!['Boss','Kì Cựu'].includes(req.user.role))return res.status(403).json({error:'Bạn không có quyền đóng phòng này'});
+  for(const peer of room.participants.values()){try{peer.ws.send(JSON.stringify({type:'room-closed'}));peer.ws.close(4001,'room closed');}catch{}}
+  voiceRooms.delete(room.id);res.json({ok:true});
+});
+
+function collectUploadRefs(db,refs=new Set()){
+  const take=v=>{if(typeof v==='string'&&v.startsWith('/uploads/'))refs.add(path.basename(v));};
+  for(const u of (db?.users||[])){take(u.avatar);for(const h of (u.highlights||[]))take(h.url);}
+  for(const m of (db?.chat||[]))take(m.attachmentUrl);
+  return refs;
+}
+function referencedUploadFiles(db){
+  const refs=collectUploadRefs(db);
+  // Giữ cả file được tham chiếu bởi backup để Restore không bị mất avatar/highlight cũ.
+  try{for(const file of fs.readdirSync(backupDir).filter(f=>/^db-.*\.json$/i.test(f))){try{collectUploadRefs(JSON.parse(fs.readFileSync(path.join(backupDir,file),'utf8')),refs);}catch{}}}catch{}
+  return refs;
+}
+function cleanupSystemData(manualBy=''){
+  const db=load(),settings=db.systemSettings,now=Date.now(),stats={logs:0,notifications:0,teamPosts:0,sessions:0,uploads:0};
+  const logCut=now-settings.logRetentionDays*86400000,beforeLogs=db.logs.length;db.logs=db.logs.filter(x=>!x.at||new Date(x.at).getTime()>=logCut);stats.logs=beforeLogs-db.logs.length;
+  const noteCut=now-90*86400000,beforeNotes=db.notifications.length;db.notifications=db.notifications.filter(x=>!x.createdAt||new Date(x.createdAt).getTime()>=noteCut);stats.notifications=beforeNotes-db.notifications.length;
+  const teamCut=now-30*86400000,beforeTeams=db.teamPosts.length;db.teamPosts=db.teamPosts.filter(x=>{const exp=new Date(x.expiresAt||x.createdAt||0).getTime();return !exp||exp>=teamCut;});stats.teamPosts=beforeTeams-db.teamPosts.length;
+  const sessions=persistentSessionStore.readAll(),beforeSessions=Object.keys(sessions).length;if(persistentSessionStore.prune(sessions))persistentSessionStore.writeAll(sessions);stats.sessions=beforeSessions-Object.keys(sessions).length;
+  const refs=referencedUploadFiles(db),orphanCut=now-settings.uploadOrphanDays*86400000;
+  try{for(const f of fs.readdirSync(uploadDir)){const p=path.join(uploadDir,f),st=fs.statSync(p);if(st.isFile()&&!refs.has(f)&&st.mtimeMs<orphanCut){fs.unlinkSync(p);stats.uploads++;}}}catch(e){console.warn('[Cleanup] upload:',e.message);}
+  db.systemMeta={...(db.systemMeta||{}),lastCleanupAt:new Date().toISOString(),lastCleanupStats:stats};addLog(db,manualBy?'manual_cleanup':'scheduled_cleanup',{by:manualBy||'Hệ thống',category:'system',stats});save(db);return stats;
+}
+function maybeScheduledCleanup(){
+  try{const db=load(),settings=db.systemSettings,last=new Date(db.systemMeta?.lastCleanupAt||0).getTime()||0;if(Date.now()-last>=settings.cleanupIntervalHours*3600000)cleanupSystemData('');}catch(e){console.error('[Cleanup]',e.message);}
+}
+setInterval(maybeScheduledCleanup,60*60*1000).unref?.();
+setTimeout(maybeScheduledCleanup,30*1000).unref?.();
+
+app.get('/api/admin/system-settings', auth, admin, bossOnly, (req,res)=>{const db=load();res.json({settings:db.systemSettings,meta:db.systemMeta||{}});});
+app.post('/api/admin/system-settings', auth, admin, bossOnly, (req,res)=>{
+  const db=load(),before=db.systemSettings;db.systemSettings=normalizeSystemSettings({...before,...(req.body||{})});addLog(db,'system_settings_update',{by:req.user.username,category:'security',before,after:db.systemSettings});save(db);res.json({settings:db.systemSettings});
+});
+app.post('/api/admin/system-cleanup', auth, admin, bossOnly, (req,res)=>{const stats=cleanupSystemData(req.user.username);res.json({ok:true,stats,meta:load().systemMeta||{}});});
+
+
 // ===== v1.8 Professional System =====
 app.get('/api/version', (req,res)=>res.json({name:APP_NAME,version:APP_VERSION,serverTime:new Date().toISOString()}));
 app.get('/api/system/status', auth, (req,res)=>{
-  const db=load();
+  const db=load(),settings=db.systemSettings;
   const dirSize=dir=>{let total=0;try{for(const f of fs.readdirSync(dir)){const p=path.join(dir,f),st=fs.statSync(p);if(st.isFile())total+=st.size;}}catch{}return total;};
   let writable=true; try{const t=path.join(storageRoot,'.healthcheck');fs.writeFileSync(t,String(Date.now()));fs.unlinkSync(t);}catch{writable=false;}
   const backups=fs.readdirSync(backupDir).filter(f=>/^db-.*\.json$/i.test(f)).map(f=>({f,t:fs.statSync(path.join(backupDir,f)).mtimeMs})).sort((a,b)=>b.t-a.t);
+  const storageBytes=dirSize(dataDir)+dirSize(uploadDir)+dirSize(backupDir)+dirSize(sessionDir),alerts=[];
+  if(!writable)alerts.push({level:'danger',title:'Storage không ghi được',detail:'Kiểm tra Railway Volume /app/storage.'});
+  if(storageBytes>settings.storageWarningMb*1024*1024)alerts.push({level:'warning',title:'Dung lượng lưu trữ cao',detail:`Đã vượt ${settings.storageWarningMb} MB.`});
+  const maxBackupAge=Math.max(6,Number(process.env.AUTO_BACKUP_HOURS||6)*3)*3600000;if(!backups[0]||Date.now()-backups[0].t>maxBackupAge)alerts.push({level:'warning',title:'Backup chưa cập nhật',detail:'Nên kiểm tra tác vụ sao lưu tự động.'});
+  if(db.logs.length>5000)alerts.push({level:'info',title:'Audit Log lớn',detail:'Tác vụ tự dọn sẽ cắt log theo thời gian lưu đã cấu hình.'});
   res.json({
     app:{name:APP_NAME,version:APP_VERSION,node:process.version,uptimeSeconds:Math.floor(process.uptime()),serverTime:new Date().toISOString()},
     backend:{ok:true}, database:{ok:fs.existsSync(dbPath),users:db.users.length,logs:db.logs.length},
-    storage:{ok:writable,root:storageRoot,bytes:dirSize(dataDir)+dirSize(uploadDir)+dirSize(backupDir)+dirSize(sessionDir),dataBytes:dirSize(dataDir),uploadBytes:dirSize(uploadDir),backupBytes:dirSize(backupDir),sessionBytes:dirSize(sessionDir)},
+    storage:{ok:writable,root:storageRoot,bytes:storageBytes,dataBytes:dirSize(dataDir),uploadBytes:dirSize(uploadDir),backupBytes:dirSize(backupDir),sessionBytes:dirSize(sessionDir)},
     push:{ok:!!(vapidKeys.publicKey&&vapidKeys.privateKey),subscriptions:db.pushSubscriptions.length},
-    backup:{count:backups.length,lastAt:backups[0]?new Date(backups[0].t).toISOString():null,autoHours:Math.max(1,Number(process.env.AUTO_BACKUP_HOURS||6))}
+    backup:{count:backups.length,lastAt:backups[0]?new Date(backups[0].t).toISOString():null,autoHours:Math.max(1,Number(process.env.AUTO_BACKUP_HOURS||6))},
+    voice:{rooms:voiceRooms.size,participants:[...voiceRooms.values()].reduce((n,r)=>n+r.participants.size,0),turnConfigured:!!process.env.WEBRTC_TURN_URL},
+    cleanup:{lastAt:db.systemMeta?.lastCleanupAt||null,lastStats:db.systemMeta?.lastCleanupStats||null}, settings, alerts
   });
 });
 
-app.get('/api/account/summary', auth, (req,res)=>{
+app.get('/api/account/summary' , auth, (req,res)=>{
   const db=load(); const all=persistentSessionStore.readAll();
   const sessions=Object.values(all).filter(s=>s?.uid===req.user.id).length;
   res.json({user:safeUser(req.user),security:{twoFactorEnabled:!!req.user.twoFactorEnabled,sessions,recoveryCodesRemaining:(req.user.recoveryCodeHashes||[]).length},permissions:permissionMatrix(db)[req.user.role]||{}});
@@ -1024,10 +1159,47 @@ app.post('/api/tools/pdf/compress', auth, toolLimiter, memoryUpload.single('pdf'
   } catch { res.status(400).json({ error: 'PDF bị khóa hoặc không thể tối ưu' }); }
 });
 
+
+const voiceWss = new WebSocketServer({ server:httpServer, path:'/voice-signal', maxPayload:64*1024 });
+function wsSend(ws,payload){if(ws?.readyState===WebSocket.OPEN){try{ws.send(JSON.stringify(payload));}catch{}}}
+function leaveVoicePeer(peer, reason='left'){
+  const roomId=peer?.roomId;if(!roomId)return;const room=voiceRooms.get(roomId);peer.roomId='';if(!room)return;
+  room.participants.delete(peer.connectionId);room.lastActive=Date.now();for(const other of room.participants.values())wsSend(other.ws,{type:'peer-left',connectionId:peer.connectionId,reason});
+}
+voiceWss.on('connection',(ws,req)=>{
+  let token='';try{token=new URL(req.url,'http://localhost').searchParams.get('token')||'';}catch{}
+  const user=verifyVoiceToken(token);if(!user){ws.close(4003,'unauthorized');return;}
+  const peer={ws,connectionId:crypto.randomUUID(),userId:user.id,username:user.username,displayName:user.displayName,role:user.role,avatar:user.avatar||'',roomId:'',muted:false,deafened:false,joinAttempts:0};
+  ws.isAlive=true;ws.on('pong',()=>{ws.isAlive=true;});wsSend(ws,{type:'ready',connectionId:peer.connectionId});
+  ws.on('message',raw=>{
+    let msg;try{msg=JSON.parse(String(raw));}catch{return;}
+    if(msg.type==='join'){
+      peer.joinAttempts++;if(peer.joinAttempts>8){ws.close(4008,'too many join attempts');return;}
+      const room=voiceRooms.get(cleanText(msg.roomId,20));if(!room)return wsSend(ws,{type:'error',message:'Phòng voice không còn tồn tại'});
+      if(room.pinHash&&hashRoomPin(cleanText(msg.pin,12))!==room.pinHash)return wsSend(ws,{type:'error',message:'Mã phòng không đúng'});
+      if(room.participants.size>=room.maxParticipants)return wsSend(ws,{type:'error',message:'Phòng voice đã đầy'});
+      if([...room.participants.values()].some(p=>p.userId===peer.userId))return wsSend(ws,{type:'error',message:'Tài khoản này đã ở trong phòng từ thiết bị khác'});
+      leaveVoicePeer(peer,'switch-room');peer.roomId=room.id;peer.joinAttempts=0;room.participants.set(peer.connectionId,peer);room.lastActive=Date.now();
+      const peers=[...room.participants.values()].filter(p=>p.connectionId!==peer.connectionId).map(voicePeerView);wsSend(ws,{type:'joined',room:publicVoiceRoom(room),self:voicePeerView(peer),peers});
+      for(const other of room.participants.values())if(other.connectionId!==peer.connectionId)wsSend(other.ws,{type:'peer-joined',peer:voicePeerView(peer)});
+      return;
+    }
+    if(msg.type==='leave'){leaveVoicePeer(peer,'left');wsSend(ws,{type:'left'});return;}
+    if(msg.type==='state'){
+      const room=voiceRooms.get(peer.roomId);if(!room)return;peer.muted=!!msg.muted;peer.deafened=!!msg.deafened;for(const other of room.participants.values())if(other.connectionId!==peer.connectionId)wsSend(other.ws,{type:'peer-state',peer:voicePeerView(peer)});return;
+    }
+    if(msg.type==='signal'){
+      const room=voiceRooms.get(peer.roomId);if(!room)return;const target=room.participants.get(String(msg.target||''));if(!target)return;const data=msg.data;if(!data||typeof data!=='object')return;wsSend(target.ws,{type:'signal',from:peer.connectionId,data});return;
+    }
+  });
+  ws.on('close',()=>leaveVoicePeer(peer,'disconnected'));ws.on('error',()=>leaveVoicePeer(peer,'error'));
+});
+const voiceHeartbeat=setInterval(()=>{for(const ws of voiceWss.clients){if(ws.readyState!==WebSocket.OPEN)continue;if(ws.isAlive===false){try{ws.terminate();}catch{}continue;}ws.isAlive=false;try{ws.ping();}catch{}}for(const [id,room] of voiceRooms){if(room.participants.size===0&&Date.now()-room.lastActive>10*60*1000)voiceRooms.delete(id);}},30000);voiceHeartbeat.unref?.();
+
 const autoBackupHours = Math.max(1, Math.min(168, Number(process.env.AUTO_BACKUP_HOURS || 6)));
 setInterval(() => { try { const file = createBackupFile(); console.log(`[Backup] Tự động: ${file}`); } catch (e) { console.error('[Backup] Tự động lỗi:', e.message); } }, autoBackupHours * 60 * 60 * 1000).unref?.();
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`GiaToc Name Hub v1.8.0 running on port ${PORT}`);
+httpServer.listen(PORT, '0.0.0.0', () => {
+  console.log(`GiaToc Name Hub v1.9.0 running on port ${PORT}`);
   console.log(`[Storage] ${storageRoot}`);
 });

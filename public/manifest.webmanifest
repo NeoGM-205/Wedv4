@@ -2,7 +2,7 @@
   "id": "/",
   "name": "GiaTộc ┊Name Hub",
   "short_name": "GiaTộc Name",
-  "description": "GiaTộc ┊Name Hub v1.8: Permission Matrix, Audit Log, Account Center, Notification Preferences, Moderation Workflow, System Status và Version/Cache Manager.",
+  "description": "GiaTộc ┊Name Hub v1.9: phòng voice WebRTC, tối ưu chạy nền, chống spam, tự dọn dữ liệu, cảnh báo hệ thống và cài đặt vận hành tập trung.",
   "lang": "vi",
   "dir": "ltr",
   "start_url": "/#overview",
@@ -62,6 +62,17 @@
       "name": "Trò chuyện",
       "short_name": "Chat",
       "url": "/#chat",
+      "icons": [
+        {
+          "src": "/icons/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    },
+    {
+      "name": "Phòng voice chơi game",
+      "short_name": "Voice",
+      "url": "/#voice",
       "icons": [
         {
           "src": "/icons/icon-192.png",
@@ -191,5 +202,5 @@
       ]
     }
   ],
-  "version": "1.8.0"
+  "version": "1.9.0"
 }
