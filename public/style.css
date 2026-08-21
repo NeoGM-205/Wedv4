@@ -68,3 +68,5 @@ body.background-lite .bg,body.background-lite .role-avatar:after,body.background
 @media(prefers-reduced-motion:reduce){.role-avatar:after,.role-avatar:before,[class*="aura-"]{animation:none!important;transition:none!important}}
 
 .voice-enable-audio:not([hidden]){animation:voicePulse 1.1s ease-in-out infinite alternate;box-shadow:0 0 0 2px rgba(127,255,227,.18)}@keyframes voicePulse{from{transform:scale(1)}to{transform:scale(1.035)}}
+
+.voice-status-stack{display:flex;gap:7px;align-items:flex-end;flex-direction:column}.voice-status-stack .status-pill{white-space:nowrap}@media(max-width:700px){.voice-status-stack{align-items:flex-start}}

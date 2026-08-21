@@ -1,8 +1,17 @@
-# GiaTộc ┊Name Hub v1.9.2 — Web + PWA + Railway 24/7 + Bubblewrap
+# GiaTộc ┊Name Hub v1.9.3 — Web + PWA + Railway 24/7 + Bubblewrap
 
 Đây vẫn là **website**. PWA/Bubblewrap chỉ là lớp để cài website lên Android khi cần, không chuyển source thành ứng dụng desktop.
 
 
+
+## Nâng cấp v1.9.3 — Mic sạch + Voice nền ổn định hơn
+
+- Khử ồn, chống vọng và tự cân bằng âm lượng bằng audio constraints native của trình duyệt.
+- Giữ microphone track khi PWA chuyển sang nền; không chủ động stop/suspend mic.
+- Heartbeat voice nền 30 giây; WebSocket server có ping/pong riêng.
+- Tự phát hiện mic bị Android tạm dừng và xin lại mic khi người dùng quay lại app.
+- Hiển thị trạng thái `Mic đang hoạt động / Mic nền đang hoạt động / Micro đang tạm dừng`.
+- Lưu ý: PWA không thể bảo đảm mic 100% khi Android tắt/kill tiến trình. Muốn bảo đảm khi màn hình tắt lâu cần Android native Foreground Service.
 
 ## Nâng cấp v1.9.2 — Phòng voice & Tối ưu chạy nền
 - 🎙️ Phòng voice chơi game bằng WebRTC P2P, có phòng công khai/khóa mã, mute/deafen và đổi micro.

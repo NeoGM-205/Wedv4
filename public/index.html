@@ -11,7 +11,7 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
   <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="/style.css?v=1.9.2">
+  <link rel="stylesheet" href="/style.css?v=1.9.3">
 </head>
 <body>
 <div class="bg"></div>
@@ -150,7 +150,7 @@
         </section>
       </div>
       <section id="voiceCurrentRoom" class="card voice-current-room" hidden>
-        <div class="section-title"><div><h2 id="voiceCurrentTitle">🎧 Đang trong phòng</h2><p id="voiceCurrentMeta" class="muted"></p></div><span id="voiceQualityHint" class="status-pill">WebRTC P2P</span></div>
+        <div class="section-title"><div><h2 id="voiceCurrentTitle">🎧 Đang trong phòng</h2><p id="voiceCurrentMeta" class="muted"></p></div><div class="voice-status-stack"><span id="voiceQualityHint" class="status-pill">WebRTC P2P</span><span id="voiceBackgroundMicState" class="status-pill">🎤 Chưa dùng mic</span></div></div>
         <div class="voice-controls">
           <button id="voiceMuteBtn" data-action="voice-toggle-mute">🎤 Tắt mic</button>
           <button id="voiceDeafenBtn" class="ghost" data-action="voice-toggle-deafen">🔊 Tắt âm thanh phòng</button>
@@ -160,7 +160,7 @@
         </div>
         <div id="voiceParticipants" class="voice-participants"></div>
         <div id="voiceRemoteAudio" class="voice-audio-bin" aria-hidden="true"></div>
-        <p class="muted voice-background-note">🌙 Khi chuyển ứng dụng sang nền, Hub sẽ dừng các tác vụ giao diện không cần thiết để giảm CPU/RAM nhưng vẫn giữ voice nếu trình duyệt/hệ điều hành cho phép. Khi quay lại, kết nối sẽ tự khôi phục nếu bị hệ điều hành tạm dừng.</p>
+        <p class="muted voice-background-note">🎙️ Voice nền: Hub không tắt microphone khi chuyển sang ứng dụng khác, giữ WebRTC/WebSocket và tự khôi phục mic khi quay lại. Mic dùng khử ồn, chống vọng và tự cân bằng âm lượng của trình duyệt. Android vẫn có thể tạm dừng PWA khi tắt màn hình lâu; muốn bảo đảm 100% cần bản Android native có Foreground Service.</p>
       </section>
     </section>
 
@@ -348,13 +348,13 @@
       <section class="card system-alert-card"><div class="section-title"><h2>🚨 Cảnh báo hệ thống</h2><span id="systemAlertCount" class="status-pill">0 cảnh báo</span></div><div id="systemAlerts" class="system-alerts"><p class="muted">Đang kiểm tra...</p></div></section>
       <div class="two-col">
         <section class="card"><div class="section-title"><h2>🚦 System Status</h2><button class="ghost tiny" data-action="load-system-status">Làm mới</button></div><div id="systemStatusGrid" class="status-grid"></div><p id="statusUpdatedAt" class="muted"></p></section>
-        <section class="card"><div class="section-title"><h2>📦 Version & Cache Manager</h2><span id="appVersionBadge" class="status-pill">v1.9.2</span></div>
+        <section class="card"><div class="section-title"><h2>📦 Version & Cache Manager</h2><span id="appVersionBadge" class="status-pill">v1.9.3</span></div>
           <div id="cacheManagerInfo" class="status-list"></div>
           <div class="row"><button data-action="check-app-update">🔎 Kiểm tra cập nhật</button><button class="ghost" data-action="update-app-now">⬆️ Cập nhật ngay</button><button class="ghost danger-outline" data-action="clear-app-cache">🧹 Xóa cache ứng dụng</button></div>
           <p class="muted">Xóa cache ứng dụng không xóa tài khoản trên máy chủ. Dữ liệu Offline Queue được quản lý riêng trong Trung tâm Đồng bộ.</p>
         </section>
       </div>
-      <section class="card background-performance-card"><div class="section-title"><h2>⚡ Tối ưu chạy nền</h2><span id="backgroundModeBadge" class="status-pill">Đang hoạt động</span></div><div class="status-list"><div><b>Chat tự làm mới</b><span>Dừng khi ứng dụng ở nền</span></div><div><b>Thông báo</b><span>Dùng Push thay cho polling nền</span></div><div><b>Hiệu ứng giao diện</b><span>Tạm dừng khi ở nền</span></div><div><b>Voice</b><span>Giữ kết nối khi hệ điều hành cho phép</span></div></div><p class="muted">PWA không thể ép Android giữ tiến trình chạy mãi khi màn hình tắt. Hub ưu tiên tiết kiệm tài nguyên và tự kết nối lại khi bạn mở ứng dụng.</p></section>
+      <section class="card background-performance-card"><div class="section-title"><h2>⚡ Tối ưu chạy nền</h2><span id="backgroundModeBadge" class="status-pill">Đang hoạt động</span></div><div class="status-list"><div><b>Chat tự làm mới</b><span>Dừng khi ứng dụng ở nền</span></div><div><b>Thông báo</b><span>Dùng Push thay cho polling nền</span></div><div><b>Hiệu ứng giao diện</b><span>Tạm dừng khi ở nền</span></div><div><b>Voice + microphone</b><span>Giữ track mic và kết nối khi chạy nền nếu Android cho phép</span></div></div><p class="muted">Khi đang ở phòng voice, Hub ưu tiên giữ WebRTC + microphone và giảm các tác vụ khác. PWA vẫn không thể ép Android giữ microphone 100% khi hệ điều hành đóng tiến trình; trường hợp cần bảo đảm cả khi tắt màn hình lâu phải dùng Android native Foreground Service.</p></section>
     </section>
 
     <section class="page-section" data-section="security" hidden>
@@ -390,10 +390,10 @@
     </section>
   </section>
 </main>
-<script src="/vendor/qrcode.bundle.js?v=1.9.2"></script>
-<script src="/vendor/pdf-lib.min.js?v=1.9.2"></script>
-<script src="/offline-db.js?v=1.9.2"></script>
-<script src="/app.js?v=1.9.2"></script>
-<script src="/pwa.js?v=1.9.2"></script>
+<script src="/vendor/qrcode.bundle.js?v=1.9.3"></script>
+<script src="/vendor/pdf-lib.min.js?v=1.9.3"></script>
+<script src="/offline-db.js?v=1.9.3"></script>
+<script src="/app.js?v=1.9.3"></script>
+<script src="/pwa.js?v=1.9.3"></script>
 </body>
 </html>

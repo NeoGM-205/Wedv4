@@ -685,7 +685,8 @@ async function awardAchievementTemplate(id){if(!requireOnline('Trao thành tích
 const voiceState = {
   ws:null, localStream:null, roomId:'', roomPin:'', room:null, self:null, peers:new Map(), muted:false, deafened:false,
   manualLeave:false, reconnectTimer:null, reconnectAttempts:0, selectedMicId:'', iceServers:[], maxParticipants:6, configLoaded:false, turnConfigured:false, audioContext:null, audioBlocked:false,
-  relayEnabled:true, relayActive:false, relayTimer:null, relayProcessor:null, relaySource:null, relaySilentGain:null, relayPlayHeads:new Map(), relaySampleRate:16000
+  relayEnabled:true, relayActive:false, relayTimer:null, relayProcessor:null, relaySource:null, relaySilentGain:null, relayPlayHeads:new Map(), relaySampleRate:16000,
+  micInterrupted:false, micRecoveryTimer:null, micSettings:null, backgroundSince:0, mediaSessionReady:false
 };
 function voiceStatus(text, mode='normal'){
   const el=$('#voiceConnectionState'); if(el){el.textContent=text;el.classList.toggle('offline-ready',mode==='ok');}
@@ -728,20 +729,72 @@ async function createVoiceRoom(){
 }
 async function closeVoiceRoom(id){if(!requireOnline('Đóng phòng voice'))return;if(!confirm('Đóng phòng voice này? Thành viên trong phòng sẽ bị ngắt kết nối.'))return;try{await api('/api/voice/rooms/'+encodeURIComponent(id),{method:'DELETE'});if(voiceState.roomId===id)await leaveVoiceRoom(true);await loadVoiceRooms();}catch(e){alert(e.message)}}
 function voiceAudioConstraints(deviceId=''){
-  return {audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:1,sampleRate:{ideal:48000},...(deviceId?{deviceId:{exact:deviceId}}:{})},video:false};
+  const supported=navigator.mediaDevices?.getSupportedConstraints?.()||{};
+  const audio={};
+  if(supported.echoCancellation!==false)audio.echoCancellation={ideal:true};
+  if(supported.noiseSuppression!==false)audio.noiseSuppression={ideal:true};
+  if(supported.autoGainControl!==false)audio.autoGainControl={ideal:true};
+  if(supported.channelCount!==false)audio.channelCount={ideal:1};
+  if(supported.sampleRate!==false)audio.sampleRate={ideal:48000};
+  if(supported.sampleSize!==false)audio.sampleSize={ideal:16};
+  if(supported.latency!==false)audio.latency={ideal:0.02};
+  if(deviceId)audio.deviceId={exact:deviceId};
+  return {audio,video:false};
+}
+function updateVoiceMicStatus(){
+  const pill=$('#voiceBackgroundMicState');if(!pill)return;
+  const track=voiceState.localStream?.getAudioTracks?.()[0];
+  if(!voiceState.roomId){pill.textContent='🎤 Chưa dùng mic';return;}
+  if(!track||track.readyState==='ended'){pill.textContent='🟠 Micro đang tạm dừng';return;}
+  if(voiceState.muted){pill.textContent='🔇 Mic đang tắt';return;}
+  pill.textContent=document.hidden?'🎙️ Mic nền đang hoạt động':'🎙️ Mic đang hoạt động';
+}
+function installVoiceTrackGuards(track){
+  if(!track)return;
+  voiceState.micSettings=track.getSettings?.()||null;
+  track.enabled=!voiceState.muted;
+  track.onended=()=>{voiceState.micInterrupted=true;updateVoiceMicStatus();if(!document.hidden)scheduleVoiceMicRecovery(250);};
+  track.onmute=()=>{voiceState.micInterrupted=true;updateVoiceMicStatus();};
+  track.onunmute=()=>{voiceState.micInterrupted=false;updateVoiceMicStatus();};
+  updateVoiceMicStatus();
+}
+function scheduleVoiceMicRecovery(delay=500){
+  if(voiceState.micRecoveryTimer||!voiceState.roomId||voiceState.manualLeave)return;
+  voiceState.micRecoveryTimer=setTimeout(async()=>{voiceState.micRecoveryTimer=null;await recoverVoiceMicrophone();},delay);
+}
+async function recoverVoiceMicrophone(){
+  if(!voiceState.roomId||voiceState.manualLeave||document.hidden)return false;
+  const old=voiceState.localStream;const oldTrack=old?.getAudioTracks?.()[0];
+  if(oldTrack&&oldTrack.readyState==='live'&&old?.active){voiceState.micInterrupted=false;updateVoiceMicStatus();return true;}
+  try{
+    const next=await navigator.mediaDevices.getUserMedia(voiceAudioConstraints(voiceState.selectedMicId));
+    const track=next.getAudioTracks()[0];installVoiceTrackGuards(track);voiceState.localStream=next;
+    for(const item of voiceState.peers.values()){const sender=item.pc?.getSenders?.().find(x=>x.track?.kind==='audio');if(sender)await sender.replaceTrack(track).catch(()=>{});}
+    try{old?.getTracks?.().forEach(t=>t.stop());}catch{}
+    if(voiceState.relayActive)await restartVoiceRelayCapture();
+    voiceState.micInterrupted=false;await populateVoiceMicrophones();updateVoiceMicStatus();return true;
+  }catch(e){console.warn('Khôi phục micro:',e);voiceStatus('🟠 Micro bị hệ điều hành tạm dừng');updateVoiceMicStatus();return false;}
+}
+function configureVoiceMediaSession(){
+  if(voiceState.mediaSessionReady||!('mediaSession' in navigator))return;
+  try{
+    navigator.mediaSession.metadata=new MediaMetadata({title:'GiaTộc ┊Name Hub',artist:'Phòng voice đang hoạt động',album:'Voice Chat'});
+    navigator.mediaSession.playbackState='playing';voiceState.mediaSessionReady=true;
+  }catch{}
 }
 async function ensureVoiceMicrophone(deviceId=voiceState.selectedMicId){
   if(!navigator.mediaDevices?.getUserMedia)throw new Error('Trình duyệt này không hỗ trợ micro WebRTC.');
   if(location.protocol!=='https:'&&location.hostname!=='localhost'&&location.hostname!=='127.0.0.1')throw new Error('Voice cần HTTPS (hoặc localhost) để sử dụng micro.');
-  if(voiceState.localStream)return voiceState.localStream;
+  const existing=voiceState.localStream?.getAudioTracks?.()[0];
+  if(existing&&existing.readyState==='live'&&voiceState.localStream.active){installVoiceTrackGuards(existing);return voiceState.localStream;}
   voiceState.localStream=await navigator.mediaDevices.getUserMedia(voiceAudioConstraints(deviceId));
-  voiceState.localStream.getAudioTracks().forEach(t=>t.enabled=!voiceState.muted);await populateVoiceMicrophones();return voiceState.localStream;
+  const track=voiceState.localStream.getAudioTracks()[0];installVoiceTrackGuards(track);configureVoiceMediaSession();await populateVoiceMicrophones();return voiceState.localStream;
 }
 async function populateVoiceMicrophones(){
   const sel=$('#voiceMicSelect');if(!sel||!navigator.mediaDevices?.enumerateDevices)return;try{const devices=(await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==='audioinput');const current=voiceState.selectedMicId||voiceState.localStream?.getAudioTracks?.()[0]?.getSettings?.().deviceId||'';sel.innerHTML='<option value="">Micro mặc định</option>'+devices.map((d,i)=>`<option value="${esc(d.deviceId)}">${esc(d.label||`Micro ${i+1}`)}</option>`).join('');sel.value=current||'';}catch{}}
 async function changeVoiceMicrophone(){
   const id=$('#voiceMicSelect')?.value||'';voiceState.selectedMicId=id;if(!voiceState.roomId)return;
-  try{const next=await navigator.mediaDevices.getUserMedia(voiceAudioConstraints(id));const track=next.getAudioTracks()[0];track.enabled=!voiceState.muted;for(const item of voiceState.peers.values()){const sender=item.pc?.getSenders?.().find(s=>s.track?.kind==='audio');if(sender)await sender.replaceTrack(track);}voiceState.localStream?.getTracks().forEach(t=>t.stop());voiceState.localStream=next;if(voiceState.relayActive)await restartVoiceRelayCapture();await populateVoiceMicrophones();}
+  try{const next=await navigator.mediaDevices.getUserMedia(voiceAudioConstraints(id));const track=next.getAudioTracks()[0];installVoiceTrackGuards(track);for(const item of voiceState.peers.values()){const sender=item.pc?.getSenders?.().find(s=>s.track?.kind==='audio');if(sender)await sender.replaceTrack(track);}voiceState.localStream?.getTracks().forEach(t=>t.stop());voiceState.localStream=next;if(voiceState.relayActive)await restartVoiceRelayCapture();await populateVoiceMicrophones();updateVoiceMicStatus();}
   catch(e){alert('Không đổi được micro: '+e.message);}
 }
 function setVoiceAudioBlocked(blocked, message=''){
@@ -862,12 +915,19 @@ async function joinVoiceRoom(roomId,locked=false,providedPin=''){
   if(voiceState.roomId&&voiceState.roomId!==roomId)await leaveVoiceRoom(true);
   try{await ensureVoiceMicrophone();voiceState.roomId=roomId;voiceState.roomPin=pin;await voiceConnect(roomId,pin);}catch(e){await leaveVoiceRoom(true);alert('Không thể mở voice: '+e.message);}
 }
-function toggleVoiceMute(){if(!voiceState.roomId)return;voiceState.muted=!voiceState.muted;voiceState.localStream?.getAudioTracks().forEach(t=>t.enabled=!voiceState.muted);voiceSend({type:'state',muted:voiceState.muted,deafened:voiceState.deafened});renderVoiceRoomState();}
+function toggleVoiceMute(){if(!voiceState.roomId)return;voiceState.muted=!voiceState.muted;voiceState.localStream?.getAudioTracks().forEach(t=>t.enabled=!voiceState.muted);voiceSend({type:'state',muted:voiceState.muted,deafened:voiceState.deafened});renderVoiceRoomState();updateVoiceMicStatus();}
 function toggleVoiceDeafen(){if(!voiceState.roomId)return;voiceState.deafened=!voiceState.deafened;for(const item of voiceState.peers.values())if(item.audioEl)item.audioEl.muted=voiceState.deafened;if(!voiceState.deafened)unlockVoiceAudio();else setVoiceAudioBlocked(false,'🔕 Đã tắt âm thanh phòng');voiceSend({type:'state',muted:voiceState.muted,deafened:voiceState.deafened});renderVoiceRoomState();updateVoiceConnectionHint();}
 async function leaveVoiceRoom(silent=false){
-  voiceState.manualLeave=true;if(voiceState.reconnectTimer)clearTimeout(voiceState.reconnectTimer);voiceState.reconnectTimer=null;voiceState.relayActive=false;await stopVoiceRelayCapture();voiceState.relayPlayHeads.clear();try{voiceSend({type:'leave'});}catch{}try{voiceState.ws?.close(1000,'leave');}catch{}voiceState.ws=null;destroyVoicePeers();voiceState.localStream?.getTracks().forEach(t=>t.stop());voiceState.localStream=null;voiceState.roomId='';voiceState.roomPin='';voiceState.room=null;voiceState.self=null;voiceState.muted=false;voiceState.deafened=false;voiceState.reconnectAttempts=0;voiceState.audioBlocked=false;voiceStatus('Chưa kết nối');renderVoiceRoomState();if(activeRoute==='voice'&&isOnline())loadVoiceRooms();if(!silent)updatePerformanceUi();
+  voiceState.manualLeave=true;if(voiceState.reconnectTimer)clearTimeout(voiceState.reconnectTimer);voiceState.reconnectTimer=null;if(voiceState.micRecoveryTimer)clearTimeout(voiceState.micRecoveryTimer);voiceState.micRecoveryTimer=null;voiceState.relayActive=false;await stopVoiceRelayCapture();voiceState.relayPlayHeads.clear();try{voiceSend({type:'leave'});}catch{}try{voiceState.ws?.close(1000,'leave');}catch{}voiceState.ws=null;destroyVoicePeers();voiceState.localStream?.getTracks().forEach(t=>t.stop());voiceState.localStream=null;voiceState.roomId='';voiceState.roomPin='';voiceState.room=null;voiceState.self=null;voiceState.muted=false;voiceState.deafened=false;voiceState.reconnectAttempts=0;voiceState.audioBlocked=false;voiceState.micInterrupted=false;voiceState.backgroundSince=0;try{if('mediaSession' in navigator)navigator.mediaSession.playbackState='none';}catch{}voiceState.mediaSessionReady=false;voiceStatus('Chưa kết nối');renderVoiceRoomState();updateVoiceMicStatus();if(activeRoute==='voice'&&isOnline())loadVoiceRooms();if(!silent)updatePerformanceUi();
 }
-function voiceResumeAfterVisibility(){if(!document.hidden&&voiceState.roomId&&!voiceState.ws&&isOnline()&&!voiceState.manualLeave){scheduleVoiceReconnect();}for(const item of voiceState.peers.values())if(item.audioEl&&!voiceState.deafened)item.audioEl.play().catch(()=>{});}
+async function voiceResumeAfterVisibility(){
+  if(!voiceState.roomId)return;
+  if(!voiceState.ws&&isOnline()&&!voiceState.manualLeave)scheduleVoiceReconnect();
+  const track=voiceState.localStream?.getAudioTracks?.()[0];if(!track||track.readyState==='ended'||!voiceState.localStream?.active)await recoverVoiceMicrophone();
+  if(voiceState.audioContext?.state==='suspended')voiceState.audioContext.resume().catch(()=>{});
+  for(const item of voiceState.peers.values())if(item.audioEl&&!voiceState.deafened)item.audioEl.play().catch(()=>{});
+  updateVoiceMicStatus();
+}
 
 
 
@@ -918,11 +978,11 @@ function formatBytes(bytes){const n=Number(bytes)||0;if(n<1024)return `${n} B`;i
 async function loadSystemStatus(){
   const box=$('#systemStatusGrid'); if(!box||!me)return;
   if(!isOnline()){box.innerHTML='<div class="status-tile warn"><b>🟠 Offline</b><span>Không thể kiểm tra backend lúc này.</span></div>';refreshCacheManager();return;}
-  try{const j=await api('/api/system/status');box.innerHTML=`<div class="status-tile ok"><b>🟢 Backend</b><span>v${esc(j.app?.version||'?')} • uptime ${Math.floor((j.app?.uptimeSeconds||0)/60)} phút</span></div><div class="status-tile ${j.database?.ok?'ok':'bad'}"><b>${j.database?.ok?'🟢':'🔴'} Database</b><span>${j.database?.users||0} users • ${j.database?.logs||0} logs</span></div><div class="status-tile ${j.storage?.ok?'ok':'bad'}"><b>${j.storage?.ok?'🟢':'🔴'} Storage</b><span>${formatBytes(j.storage?.bytes)} • ${esc(j.storage?.root||'')}</span></div><div class="status-tile ${j.push?.ok?'ok':'bad'}"><b>${j.push?.ok?'🟢':'🔴'} Push</b><span>${j.push?.subscriptions||0} subscriptions</span></div><div class="status-tile ok"><b>💾 Backup</b><span>${j.backup?.count||0} bản • ${j.backup?.lastAt?fmtDate(j.backup.lastAt):'chưa có'}</span></div><div class="status-tile ok"><b>🎙️ Voice</b><span>${j.voice?.rooms||0} phòng • ${j.voice?.participants||0} người${j.voice?.turnConfigured?' • TURN ✓':(j.voice?.relayFallback?' • STUN + Relay dự phòng':' • STUN')}</span></div><div class="status-tile ok"><b>🧹 Tự dọn</b><span>${j.cleanup?.lastAt?fmtDate(j.cleanup.lastAt):'chưa chạy'}</span></div>`;$('#statusUpdatedAt').textContent=`Cập nhật: ${fmtDate(j.app?.serverTime||new Date().toISOString())}`;if($('#appVersionBadge'))$('#appVersionBadge').textContent=`v${j.app?.version||'1.9.2'}`;
+  try{const j=await api('/api/system/status');box.innerHTML=`<div class="status-tile ok"><b>🟢 Backend</b><span>v${esc(j.app?.version||'?')} • uptime ${Math.floor((j.app?.uptimeSeconds||0)/60)} phút</span></div><div class="status-tile ${j.database?.ok?'ok':'bad'}"><b>${j.database?.ok?'🟢':'🔴'} Database</b><span>${j.database?.users||0} users • ${j.database?.logs||0} logs</span></div><div class="status-tile ${j.storage?.ok?'ok':'bad'}"><b>${j.storage?.ok?'🟢':'🔴'} Storage</b><span>${formatBytes(j.storage?.bytes)} • ${esc(j.storage?.root||'')}</span></div><div class="status-tile ${j.push?.ok?'ok':'bad'}"><b>${j.push?.ok?'🟢':'🔴'} Push</b><span>${j.push?.subscriptions||0} subscriptions</span></div><div class="status-tile ok"><b>💾 Backup</b><span>${j.backup?.count||0} bản • ${j.backup?.lastAt?fmtDate(j.backup.lastAt):'chưa có'}</span></div><div class="status-tile ok"><b>🎙️ Voice</b><span>${j.voice?.rooms||0} phòng • ${j.voice?.participants||0} người${j.voice?.turnConfigured?' • TURN ✓':(j.voice?.relayFallback?' • STUN + Relay dự phòng':' • STUN')}</span></div><div class="status-tile ok"><b>🧹 Tự dọn</b><span>${j.cleanup?.lastAt?fmtDate(j.cleanup.lastAt):'chưa chạy'}</span></div>`;$('#statusUpdatedAt').textContent=`Cập nhật: ${fmtDate(j.app?.serverTime||new Date().toISOString())}`;if($('#appVersionBadge'))$('#appVersionBadge').textContent=`v${j.app?.version||'1.9.3'}`;
     const alerts=j.alerts||[];if($('#systemAlertCount'))$('#systemAlertCount').textContent=`${alerts.length} cảnh báo`;if($('#systemAlerts'))$('#systemAlerts').innerHTML=alerts.length?alerts.map(a=>`<article class="system-alert ${esc(a.level||'info')}"><b>${a.level==='danger'?'🔴':a.level==='warning'?'🟠':'🔵'} ${esc(a.title)}</b><span>${esc(a.detail||'')}</span></article>`).join(''):'<div class="system-alert ok"><b>🟢 Hệ thống ổn định</b><span>Không phát hiện cảnh báo vận hành.</span></div>';updatePerformanceUi();
   }catch(e){box.innerHTML=`<p class="offline-note">${esc(e.message)}</p>`;}
 }
-async function refreshCacheManager(){const box=$('#cacheManagerInfo');if(!box)return;try{const info=await window.getAppCacheInfo?.()||{};box.innerHTML=`<div><b>Service Worker</b><span>${info.controlled?'🟢 Đang kiểm soát':'🟠 Chưa kiểm soát'}</span></div><div><b>Phiên bản client</b><span>${esc(info.version||'1.9.2')}</span></div><div><b>Update chờ</b><span>${info.waiting?'Có bản mới sẵn sàng':'Không'}</span></div><div><b>Cache</b><span>${(info.cacheKeys||[]).map(esc).join(', ')||'Chưa có'}</span></div>`;}catch(e){box.innerHTML=`<p class="muted">${esc(e.message)}</p>`;}}
+async function refreshCacheManager(){const box=$('#cacheManagerInfo');if(!box)return;try{const info=await window.getAppCacheInfo?.()||{};box.innerHTML=`<div><b>Service Worker</b><span>${info.controlled?'🟢 Đang kiểm soát':'🟠 Chưa kiểm soát'}</span></div><div><b>Phiên bản client</b><span>${esc(info.version||'1.9.3')}</span></div><div><b>Update chờ</b><span>${info.waiting?'Có bản mới sẵn sàng':'Không'}</span></div><div><b>Cache</b><span>${(info.cacheKeys||[]).map(esc).join(', ')||'Chưa có'}</span></div>`;}catch(e){box.innerHTML=`<p class="muted">${esc(e.message)}</p>`;}}
 async function checkAppUpdate(){try{const j=await window.checkForAppUpdate?.();await refreshCacheManager();alert(j?.waiting?'Có bản cập nhật mới. Bấm “Cập nhật ngay”.':'Bạn đang dùng bản mới nhất đã phát hiện.');}catch(e){alert(e.message||'Không kiểm tra được cập nhật.')}}
 async function updateAppNow(){try{await window.forceAppUpdate?.();}catch(e){alert(e.message||'Không thể cập nhật.')}}
 async function clearAppCache(){if(!confirm('Xóa cache ứng dụng và tải lại? Offline Queue không bị xóa.'))return;try{await window.clearAppCaches?.();location.reload();}catch(e){alert(e.message||'Không thể xóa cache.')}}
@@ -943,14 +1003,15 @@ async function runSystemCleanup(){
 }
 
 function updatePerformanceUi(){
-  const hidden=document.hidden;document.body.classList.toggle('background-lite',hidden);const p=$('#performanceState');if(p){p.textContent=hidden?(voiceState.roomId?'🎙️ Voice nền':'🌙 Nền nhẹ'):'⚡ Hoạt động';p.className=`network-pill ${hidden?'offline':'online'}`;}
-  const b=$('#backgroundModeBadge');if(b)b.textContent=hidden?'🌙 Đang tiết kiệm tài nguyên':'⚡ Đang hoạt động';
+  const hidden=document.hidden;document.body.classList.toggle('background-lite',hidden);if(hidden&&voiceState.roomId&&!voiceState.backgroundSince)voiceState.backgroundSince=Date.now();if(!hidden)voiceState.backgroundSince=0;
+  const p=$('#performanceState');if(p){p.textContent=hidden?(voiceState.roomId?'🎙️ Voice + mic nền':'🌙 Nền nhẹ'):'⚡ Hoạt động';p.className=`network-pill ${hidden?'offline':'online'}`;}
+  const b=$('#backgroundModeBadge');if(b)b.textContent=hidden?(voiceState.roomId?'🎙️ Đang giữ voice nền':'🌙 Đang tiết kiệm tài nguyên'):'⚡ Đang hoạt động';updateVoiceMicStatus();
 }
 function stopAdaptiveTimers(){if(clockTimer)clearTimeout(clockTimer);if(heartbeatTimer)clearTimeout(heartbeatTimer);if(notificationTimer)clearTimeout(notificationTimer);clockTimer=heartbeatTimer=notificationTimer=null;}
 function startAdaptiveTimers(){
   stopAdaptiveTimers();
   const clockTick=()=>{if($('#clock'))$('#clock').textContent=new Date().toLocaleString('vi-VN');clockTimer=setTimeout(clockTick,document.hidden?60000:1000);};
-  const heartbeatTick=async()=>{try{if(me&&isOnline()&&(!document.hidden||voiceState.roomId)){await fetch('/api/ping',{method:'POST',credentials:'same-origin'});if(!document.hidden)await members();}}catch{}heartbeatTimer=setTimeout(heartbeatTick,document.hidden?(voiceState.roomId?120000:300000):60000);};
+  const heartbeatTick=async()=>{try{if(me&&isOnline()&&(!document.hidden||voiceState.roomId)){await fetch('/api/ping',{method:'POST',credentials:'same-origin'});if(!document.hidden)await members();}}catch{}heartbeatTimer=setTimeout(heartbeatTick,document.hidden?(voiceState.roomId?30000:300000):60000);};
   const noteTick=async()=>{try{if(me&&isOnline()&&!document.hidden)await loadNotifications();}catch{}notificationTimer=setTimeout(noteTick,document.hidden?300000:30000);};
   clockTick();heartbeatTimer=setTimeout(heartbeatTick,60000);notificationTimer=setTimeout(noteTick,30000);updatePerformanceUi();
 }
@@ -963,8 +1024,11 @@ window.addEventListener('offline', async () => { stopChatTimer(); stopVoiceRoomR
 document.addEventListener('visibilitychange', async () => {
   updatePerformanceUi();startAdaptiveTimers();
   if(document.hidden){stopChatTimer();stopVoiceRoomRefresh();}
-  else{if(activeRoute==='chat')startChatTimer();if(activeRoute==='voice')startVoiceRoomRefresh();voiceResumeAfterVisibility();if(me&&isOnline())await Promise.allSettled([members(),loadNotifications()]);}
+  else{if(activeRoute==='chat')startChatTimer();if(activeRoute==='voice')startVoiceRoomRefresh();await voiceResumeAfterVisibility();if(me&&isOnline())await Promise.allSettled([members(),loadNotifications()]);}
 });
+window.addEventListener('pageshow',()=>{if(voiceState.roomId)voiceResumeAfterVisibility();});
+document.addEventListener('freeze',()=>{if(voiceState.roomId){voiceState.micInterrupted=true;voiceStatus('🟠 Android đang tạm dừng ứng dụng');updateVoiceMicStatus();}});
+document.addEventListener('resume',()=>{if(voiceState.roomId)voiceResumeAfterVisibility();});
 window.addEventListener('error', event => console.error('UI error:', event.error || event.message));
 window.addEventListener('unhandledrejection', event => console.error('Promise error:', event.reason));
 setupInteractions();

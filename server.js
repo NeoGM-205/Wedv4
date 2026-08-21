@@ -18,7 +18,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const httpServer = http.createServer(app);
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = '1.9.2';
+const APP_VERSION = '1.9.3';
 const APP_NAME = 'GiaTộc ┊Name Hub';
 
 // Tất cả dữ liệu phát sinh được gom vào một thư mục duy nhất.
@@ -941,7 +941,7 @@ function voiceIceServers(user) {
   }
   return servers;
 }
-app.get('/api/voice/config', auth, (req,res)=>res.json({iceServers:voiceIceServers(req.user),turnConfigured:!!process.env.WEBRTC_TURN_URL,relayFallback:process.env.VOICE_RELAY_FALLBACK!=='false',maxParticipants:load().systemSettings.voiceMaxParticipants,meshRecommendedMax:6,backgroundNote:'PWA sẽ giữ voice khi trình duyệt cho phép và tự nối lại khi quay lại ứng dụng.'}));
+app.get('/api/voice/config', auth, (req,res)=>res.json({iceServers:voiceIceServers(req.user),turnConfigured:!!process.env.WEBRTC_TURN_URL,relayFallback:process.env.VOICE_RELAY_FALLBACK!=='false',maxParticipants:load().systemSettings.voiceMaxParticipants,meshRecommendedMax:6,backgroundNote:'Hub giữ WebRTC và microphone khi chạy nền nếu Android/trình duyệt cho phép; nếu PWA bị hệ điều hành tạm dừng, micro sẽ tự khôi phục khi quay lại.'}));
 app.post('/api/voice/token', auth, voiceLimiter, (req,res)=>res.json({token:makeVoiceToken(req.user),expiresInSeconds:120}));
 app.get('/api/voice/rooms', auth, (req,res)=>{
   const rooms=[...voiceRooms.values()].filter(r=>Date.now()-r.createdMs<12*60*60*1000).map(publicVoiceRoom).sort((a,b)=>b.participants-a.participants||new Date(b.createdAt)-new Date(a.createdAt));
@@ -1209,6 +1209,6 @@ const autoBackupHours = Math.max(1, Math.min(168, Number(process.env.AUTO_BACKUP
 setInterval(() => { try { const file = createBackupFile(); console.log(`[Backup] Tự động: ${file}`); } catch (e) { console.error('[Backup] Tự động lỗi:', e.message); } }, autoBackupHours * 60 * 60 * 1000).unref?.();
 
 httpServer.listen(PORT, '0.0.0.0', () => {
-  console.log(`GiaToc Name Hub v1.9.2 running on port ${PORT}`);
+  console.log(`GiaToc Name Hub v1.9.3 running on port ${PORT}`);
   console.log(`[Storage] ${storageRoot}`);
 });
